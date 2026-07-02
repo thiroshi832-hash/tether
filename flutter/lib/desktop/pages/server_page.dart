@@ -359,6 +359,26 @@ Widget buildConnectionCard(Client client) {
                 client.disconnected
             ? Offstage()
             : _PrivilegeBoard(client: client),
+        // Tether: live preview of the connecting user's forwarded webcam.
+        if (client.cameraFrame != null &&
+            client.type_() == ClientType.remote &&
+            !client.disconnected)
+          Container(
+            width: double.infinity,
+            height: 150,
+            margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.black,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.black26),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Image.memory(
+              client.cameraFrame!,
+              fit: BoxFit.contain,
+              gaplessPlayback: true,
+            ),
+          ),
         Expanded(
           child: Align(
             alignment: Alignment.bottomCenter,
@@ -759,6 +779,38 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
                           });
                         },
                         translate('Enable audio'),
+                        canModify: canModifyPermission,
+                      ),
+                      // Tether: allow the connecting user's own camera/mic to
+                      // be used on this machine.
+                      buildPermissionIcon(
+                        client.remoteCamera,
+                        Icons.camera_alt_rounded,
+                        (enabled) {
+                          bind.cmSwitchPermission(
+                              connId: client.id,
+                              name: "remote_camera",
+                              enabled: enabled);
+                          setState(() {
+                            client.remoteCamera = enabled;
+                          });
+                        },
+                        translate('Allow using my camera'),
+                        canModify: canModifyPermission,
+                      ),
+                      buildPermissionIcon(
+                        client.remoteMic,
+                        Icons.mic_rounded,
+                        (enabled) {
+                          bind.cmSwitchPermission(
+                              connId: client.id,
+                              name: "remote_mic",
+                              enabled: enabled);
+                          setState(() {
+                            client.remoteMic = enabled;
+                          });
+                        },
+                        translate('Allow using my microphone'),
                         canModify: canModifyPermission,
                       ),
                       buildPermissionIcon(

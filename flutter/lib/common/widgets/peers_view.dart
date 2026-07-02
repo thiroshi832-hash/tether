@@ -72,12 +72,18 @@ class _PeersView extends StatefulWidget {
   final PeerFilter? peerFilter;
   final PeerCardBuilder peerCardBuilder;
   final PeerTabIndex peerTabIndex;
+  // Tether: cap the number of peers rendered (e.g. home recent-sessions preview).
+  final int? peerCountLimit;
+  // Tether: force a specific card layout for this view (overrides the global).
+  final PeerUiType? peerCardUiTypeOverride;
 
   const _PeersView(
       {required this.peers,
       required this.peerCardBuilder,
       required this.peerTabIndex,
       this.peerFilter,
+      this.peerCountLimit,
+      this.peerCardUiTypeOverride,
       Key? key})
       : super(key: key);
 
@@ -228,6 +234,10 @@ class _PeersViewState extends State<_PeersView>
   String _cardId(String id) => widget.peers.name + id;
   String _peerId(String cardId) => cardId.replaceAll(widget.peers.name, '');
 
+  // Tether: effective card layout — per-view override, else the global option.
+  PeerUiType get _uiType =>
+      widget.peerCardUiTypeOverride ?? peerCardUiType.value;
+
   Widget _buildPeersView(Peers peers) {
     final updateEvent = peers.event;
     final body = ObxValue<RxList>((filters) {
@@ -236,6 +246,10 @@ class _PeersViewState extends State<_PeersView>
           if (snapshot.hasData) {
             var peers = snapshot.data!;
             if (peers.length > 1000) peers = peers.sublist(0, 1000);
+            final countLimit = widget.peerCountLimit;
+            if (countLimit != null && peers.length > countLimit) {
+              peers = peers.sublist(0, countLimit);
+            }
             gFFI.peerTabModel.setCurrentTabCachedPeers(peers);
             buildOnePeer(Peer peer, bool isPortrait) {
               final visibilityChild = VisibilityDetector(
@@ -249,14 +263,18 @@ class _PeersViewState extends State<_PeersView>
               // No need to listen the currentTab change event.
               // Because the currentTab change event will trigger the peers change event,
               // and the peers change event will trigger _buildPeersView().
+              Widget sizedByType(PeerUiType t) => t == PeerUiType.list
+                  ? Container(height: 45, child: visibilityChild)
+                  : t == PeerUiType.grid
+                      ? SizedBox(width: 220, height: 140, child: visibilityChild)
+                      : SizedBox(width: 220, height: 42, child: visibilityChild);
+              // Tether: with an explicit override there is no observable to
+              // watch, so an Obx here would throw "improper use of Obx". Only
+              // observe the global option when no override is provided.
               return !isPortrait
-                  ? Obx(() => peerCardUiType.value == PeerUiType.list
-                      ? Container(height: 45, child: visibilityChild)
-                      : peerCardUiType.value == PeerUiType.grid
-                          ? SizedBox(
-                              width: 220, height: 140, child: visibilityChild)
-                          : SizedBox(
-                              width: 220, height: 42, child: visibilityChild))
+                  ? (widget.peerCardUiTypeOverride != null
+                      ? sizedByType(widget.peerCardUiTypeOverride!)
+                      : Obx(() => sizedByType(peerCardUiType.value)))
                   : Container(child: visibilityChild);
             }
 
@@ -271,7 +289,7 @@ class _PeersViewState extends State<_PeersView>
                           top: index == 0 ? 0 : space / 2, bottom: space / 2);
                     },
                   )
-                : peerCardUiType.value == PeerUiType.list
+                : _uiType == PeerUiType.list
                     ? ListView.builder(
                         controller: _scrollController,
                         itemCount: peers.length,
@@ -414,12 +432,16 @@ abstract class BasePeersView extends StatelessWidget {
   final PeerTabIndex peerTabIndex;
   final PeerFilter? peerFilter;
   final PeerCardBuilder peerCardBuilder;
+  final int? peerCountLimit;
+  final PeerUiType? peerCardUiTypeOverride;
 
   const BasePeersView({
     Key? key,
     required this.peerTabIndex,
     this.peerFilter,
     required this.peerCardBuilder,
+    this.peerCountLimit,
+    this.peerCardUiTypeOverride,
   }) : super(key: key);
 
   @override
@@ -446,19 +468,28 @@ abstract class BasePeersView extends StatelessWidget {
         peers: peers,
         peerFilter: peerFilter,
         peerCardBuilder: peerCardBuilder,
-        peerTabIndex: peerTabIndex);
+        peerTabIndex: peerTabIndex,
+        peerCountLimit: peerCountLimit,
+        peerCardUiTypeOverride: peerCardUiTypeOverride);
   }
 }
 
 class RecentPeersView extends BasePeersView {
   RecentPeersView(
-      {Key? key, EdgeInsets? menuPadding, ScrollController? scrollController})
+      {Key? key,
+      EdgeInsets? menuPadding,
+      ScrollController? scrollController,
+      int? peerCountLimit,
+      PeerUiType? peerCardUiTypeOverride})
       : super(
           key: key,
           peerTabIndex: PeerTabIndex.recent,
+          peerCountLimit: peerCountLimit,
+          peerCardUiTypeOverride: peerCardUiTypeOverride,
           peerCardBuilder: (Peer peer) => RecentPeerCard(
             peer: peer,
             menuPadding: menuPadding,
+            uiTypeOverride: peerCardUiTypeOverride,
           ),
         );
 

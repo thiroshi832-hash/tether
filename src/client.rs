@@ -796,28 +796,70 @@ impl Client {
                 let bytes = res?;
                 if let Ok(msg_in) = Message::parse_from_bytes(&bytes) {
                     if let Some(message::Union::SignedId(si)) = msg_in.union {
-                        if let Ok((id, their_pk_b)) = decode_id_pk(&si.id, &sign_pk) {
-                            if id == peer_id {
-                                let (asymmetric_value, symmetric_value, key) =
-                                    create_symmetric_key_msg(their_pk_b);
-                                let mut msg_out = Message::new();
-                                msg_out.set_public_key(PublicKey {
-                                    asymmetric_value,
-                                    symmetric_value,
-                                    ..Default::default()
-                                });
-                                timeout(CONNECT_TIMEOUT, conn.send(&msg_out)).await??;
-                                conn.set_key(key);
-                            } else {
+                        match crate::common::decode_signed_id_pk(&si.id, &sign_pk) {
+                            Ok(id_pk) if id_pk.id == peer_id => {
+                                // Negotiate against the suites advertised inside the
+                                // Ed25519-signed IdPk, so the choice is authenticated
+                                // and cannot be downgraded by a man-in-the-middle.
+                                let suite = hbb_common::crypto::negotiate(&id_pk.crypto_suites);
+                                if suite
+                                    == hbb_common::crypto::CryptoSuite::X25519XChaCha20Poly1305
+                                    && id_pk.suite1_pk.len() == 32
+                                {
+                                    let mut responder_pub = [0u8; 32];
+                                    responder_pub.copy_from_slice(&id_pk.suite1_pk);
+                                    let ours = hbb_common::crypto::EcdhHalf::new();
+                                    let our_pub = ours.public;
+                                    // We are the initiator; peer (controlled side) is the
+                                    // responder. The transcript (suite + both pubkeys +
+                                    // peer id) is bound into the derived key.
+                                    let key = ours.finish(
+                                        &responder_pub,
+                                        suite,
+                                        &responder_pub,
+                                        &our_pub,
+                                        peer_id.as_bytes(),
+                                    )?;
+                                    let mut msg_out = Message::new();
+                                    msg_out.set_public_key(PublicKey {
+                                        asymmetric_value: our_pub.to_vec().into(),
+                                        crypto_suite: suite.to_u32(),
+                                        ..Default::default()
+                                    });
+                                    timeout(CONNECT_TIMEOUT, conn.send(&msg_out)).await??;
+                                    conn.set_key_suite1(key);
+                                } else if id_pk.pk.len() == 32 {
+                                    // Legacy suite 0 (stock RustDesk peer).
+                                    let mut their_pk_b = [0u8; 32];
+                                    their_pk_b.copy_from_slice(&id_pk.pk);
+                                    let (asymmetric_value, symmetric_value, key) =
+                                        create_symmetric_key_msg(their_pk_b);
+                                    let mut msg_out = Message::new();
+                                    msg_out.set_public_key(PublicKey {
+                                        asymmetric_value,
+                                        symmetric_value,
+                                        ..Default::default()
+                                    });
+                                    timeout(CONNECT_TIMEOUT, conn.send(&msg_out)).await??;
+                                    conn.set_key(key);
+                                } else {
+                                    log::info!("pk mismatch, fall back to non-secure");
+                                    let mut msg_out = Message::new();
+                                    msg_out.set_public_key(PublicKey::new());
+                                    conn.send(&msg_out).await?;
+                                }
+                            }
+                            Ok(_) => {
                                 log::error!("Handshake failed: sign failure");
                                 conn.send(&Message::new()).await?;
                             }
-                        } else {
-                            // fall back to non-secure connection in case pk mismatch
-                            log::info!("pk mismatch, fall back to non-secure");
-                            let mut msg_out = Message::new();
-                            msg_out.set_public_key(PublicKey::new());
-                            conn.send(&msg_out).await?;
+                            Err(_) => {
+                                // fall back to non-secure connection in case pk mismatch
+                                log::info!("pk mismatch, fall back to non-secure");
+                                let mut msg_out = Message::new();
+                                msg_out.set_public_key(PublicKey::new());
+                                conn.send(&msg_out).await?;
+                            }
                         }
                     } else {
                         log::error!("Handshake failed: invalid message type");

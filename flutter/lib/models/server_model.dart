@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/consts.dart';
@@ -758,6 +759,21 @@ class ServerModel with ChangeNotifier {
     }
   }
 
+  // Tether: store the latest forwarded webcam frame for a client and refresh.
+  void updateCameraFrame(Map<String, dynamic> evt) {
+    try {
+      final id = int.tryParse(evt['id']?.toString() ?? '');
+      final data = evt['data']?.toString();
+      if (id == null || data == null || data.isEmpty) return;
+      final index = _clients.indexWhere((e) => e.id == id);
+      if (index == -1) return;
+      _clients[index].cameraFrame = base64Decode(data);
+      notifyListeners();
+    } catch (e) {
+      debugPrint('updateCameraFrame failed: $e');
+    }
+  }
+
   void updateVoiceCallState(Map<String, dynamic> evt) {
     try {
       final client = Client.fromJson(jsonDecode(evt["client"]));
@@ -832,6 +848,12 @@ class Client {
   bool fromSwitch = false;
   bool inVoiceCall = false;
   bool incomingVoiceCall = false;
+  // Tether: allow the connecting user's own camera/mic to be forwarded to
+  // and used on this (controlled) machine. Toggled from the CM info window.
+  bool remoteCamera = false;
+  bool remoteMic = false;
+  // Tether: latest forwarded webcam frame (JPEG) from the connecting user.
+  Uint8List? cameraFrame;
 
   RxInt unreadChatMessageCount = 0.obs;
 
@@ -861,6 +883,8 @@ class Client {
     fromSwitch = json['from_switch'];
     inVoiceCall = json['in_voice_call'];
     incomingVoiceCall = json['incoming_voice_call'];
+    remoteCamera = json['remote_camera'] ?? false;
+    remoteMic = json['remote_mic'] ?? false;
   }
 
   Map<String, dynamic> toJson() {
@@ -886,6 +910,8 @@ class Client {
     data['from_switch'] = fromSwitch;
     data['in_voice_call'] = inVoiceCall;
     data['incoming_voice_call'] = incomingVoiceCall;
+    data['remote_camera'] = remoteCamera;
+    data['remote_mic'] = remoteMic;
     return data;
   }
 

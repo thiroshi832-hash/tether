@@ -1956,19 +1956,45 @@ async fn secure_tcp_impl(conn: &mut Stream, key: &str, log_on_success: bool) -> 
                         if ex.keys.len() != 1 {
                             bail!("Handshake failed: invalid key exchange message");
                         }
-                        let their_pk_b = sign::verify(&ex.keys[0], &rs_pk)
+                        let server_pub = sign::verify(&ex.keys[0], &rs_pk)
                             .map_err(|_| anyhow!("Signature mismatch in key exchange"))?;
-                        let (asymmetric_value, symmetric_value, key) = create_symmetric_key_msg(
-                            get_pk(&their_pk_b)
-                                .context("Wrong their public length in key exchange")?,
-                        );
-                        let mut msg_out = RendezvousMessage::new();
-                        msg_out.set_key_exchange(KeyExchange {
-                            keys: vec![asymmetric_value, symmetric_value],
-                            ..Default::default()
-                        });
-                        timeout(CONNECT_TIMEOUT, conn.send(&msg_out)).await??;
-                        conn.set_key(key);
+                        let server_pub = get_pk(&server_pub)
+                            .context("Wrong their public length in key exchange")?;
+                        // Negotiate against the suites the server advertises. A stock
+                        // rendezvous server advertises none, so this stays legacy.
+                        let suite = hbb_common::crypto::negotiate(&ex.crypto_suites);
+                        if suite
+                            == hbb_common::crypto::CryptoSuite::X25519XChaCha20Poly1305
+                        {
+                            // Server is the responder; we are the initiator.
+                            let ours = hbb_common::crypto::EcdhHalf::new();
+                            let our_pub = ours.public;
+                            let key = ours.finish(
+                                &server_pub,
+                                suite,
+                                &server_pub,
+                                &our_pub,
+                                b"tether-rendezvous-v1",
+                            )?;
+                            let mut msg_out = RendezvousMessage::new();
+                            msg_out.set_key_exchange(KeyExchange {
+                                keys: vec![our_pub.to_vec().into()],
+                                chosen_suite: suite.to_u32(),
+                                ..Default::default()
+                            });
+                            timeout(CONNECT_TIMEOUT, conn.send(&msg_out)).await??;
+                            conn.set_key_suite1(key);
+                        } else {
+                            let (asymmetric_value, symmetric_value, key) =
+                                create_symmetric_key_msg(server_pub);
+                            let mut msg_out = RendezvousMessage::new();
+                            msg_out.set_key_exchange(KeyExchange {
+                                keys: vec![asymmetric_value, symmetric_value],
+                                ..Default::default()
+                            });
+                            timeout(CONNECT_TIMEOUT, conn.send(&msg_out)).await??;
+                            conn.set_key(key);
+                        }
                         if log_on_success {
                             log::info!("Connection secured");
                         }
@@ -2011,14 +2037,22 @@ pub fn get_rs_pk(str_base64: &str) -> Option<sign::PublicKey> {
 }
 
 pub fn decode_id_pk(signed: &[u8], key: &sign::PublicKey) -> ResultType<(String, [u8; 32])> {
-    let res = IdPk::parse_from_bytes(
-        &sign::verify(signed, key).map_err(|_| anyhow!("Signature mismatch"))?,
-    )?;
+    let res = decode_signed_id_pk(signed, key)?;
     if let Some(pk) = get_pk(&res.pk) {
         Ok((res.id, pk))
     } else {
         bail!("Wrong their public length");
     }
+}
+
+/// Verify an Ed25519-signed `IdPk` and return the whole message, including the
+/// advertised `crypto_suites` and the suite-1 (`suite1_pk`) public key used for
+/// crypto-suite negotiation. Callers that only need the id + legacy box key can
+/// keep using [`decode_id_pk`].
+pub fn decode_signed_id_pk(signed: &[u8], key: &sign::PublicKey) -> ResultType<IdPk> {
+    Ok(IdPk::parse_from_bytes(
+        &sign::verify(signed, key).map_err(|_| anyhow!("Signature mismatch"))?,
+    )?)
 }
 
 pub fn create_symmetric_key_msg(their_pk_b: [u8; 32]) -> (Bytes, Bytes, secretbox::Key) {

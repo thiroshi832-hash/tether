@@ -1556,6 +1556,25 @@ pub mod connection_manager {
         fn file_transfer_log(&self, action: &str, log: &str) {
             self.push_event("cm_file_transfer_log", &[(action, log)]);
         }
+
+        fn show_cm(&self) {
+            // Tether: ask the CM window (dart) to raise/show itself.
+            self.push_event::<&str>("show_cm", &[]);
+        }
+
+        fn update_camera_frame(&self, id: i32, data: &[u8], width: i32, height: i32) {
+            // Tether: base64 the JPEG so it rides the (string) event channel.
+            let b64 = crate::common::encode64(data);
+            self.push_event(
+                "camera_frame",
+                &[
+                    ("id", id.to_string()),
+                    ("width", width.to_string()),
+                    ("height", height.to_string()),
+                    ("data", b64),
+                ],
+            );
+        }
     }
 
     impl FlutterHandler {

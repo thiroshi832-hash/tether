@@ -64,6 +64,11 @@ pub struct Remote<T: InvokeUiSession> {
     sender: mpsc::UnboundedSender<Data>,
     // Stop sending local audio to remote client.
     stop_voice_call_sender: Option<std::sync::mpsc::Sender<()>>,
+    // Tether: stop forwarding the local microphone to the controlled machine
+    // (enabled from the controlled side's CM window, independent of voice call).
+    stop_mic_forward_sender: Option<std::sync::mpsc::Sender<()>>,
+    // Tether: stop forwarding the local webcam to the controlled machine.
+    stop_camera_forward_sender: Option<std::sync::mpsc::Sender<()>>,
     voice_call_request_timestamp: Option<NonZeroI64>,
     read_jobs: Vec<fs::TransferJob>,
     write_jobs: Vec<fs::TransferJob>,
@@ -124,6 +129,8 @@ impl<T: InvokeUiSession> Remote<T> {
             data_count: Arc::new(AtomicUsize::new(0)),
             video_format: CodecFormat::Unknown,
             stop_voice_call_sender: None,
+            stop_mic_forward_sender: None,
+            stop_camera_forward_sender: None,
             voice_call_request_timestamp: None,
             elevation_requested: false,
             peer_info: Default::default(),
@@ -333,6 +340,14 @@ impl<T: InvokeUiSession> Remote<T> {
                 if let Some(s) = self.stop_voice_call_sender.take() {
                     s.send(()).ok();
                 }
+                // Tether: stop microphone forwarding.
+                if let Some(s) = self.stop_mic_forward_sender.take() {
+                    s.send(()).ok();
+                }
+                // Tether: stop camera forwarding.
+                if let Some(s) = self.stop_camera_forward_sender.take() {
+                    s.send(()).ok();
+                }
                 if kcp.is_some() {
                     // Send the close reason if it hasn't been sent yet, as KCP cannot detect the socket close event.
                     self.send_close_reason(&mut peer, "kcp").await;
@@ -528,6 +543,91 @@ impl<T: InvokeUiSession> Remote<T> {
             return Some(tx);
         }
         #[cfg(target_os = "ios")]
+        {
+            None
+        }
+    }
+
+    // Tether: capture the local webcam and forward it to the controlled machine
+    // as JPEG frames (shown in the controlled side's CM window). Returns a stop
+    // channel; sending on it (or dropping it) ends the capture thread.
+    fn start_camera_forward(&mut self) -> Option<std::sync::mpsc::Sender<()>> {
+        if self.handler.is_file_transfer()
+            || self.handler.is_port_forward()
+            || self.handler.is_terminal()
+        {
+            return None;
+        }
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        {
+            if !scrap::camera::primary_camera_exists() {
+                log::info!("Tether: no local camera to forward");
+                return None;
+            }
+            let (tx, rx) = std::sync::mpsc::channel::<()>();
+            let tx_msg = self.sender.clone();
+            std::thread::spawn(move || {
+                use scrap::TraitPixelBuffer;
+                let mut capturer =
+                    match scrap::camera::Cameras::get_capturer(scrap::camera::PRIMARY_CAMERA_IDX) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            log::error!("Tether: open camera failed: {}", e);
+                            return;
+                        }
+                    };
+                let spf = std::time::Duration::from_millis(100); // ~10 fps
+                loop {
+                    match rx.try_recv() {
+                        Ok(_) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            log::debug!("Tether: stop camera forward");
+                            break;
+                        }
+                        _ => {}
+                    }
+                    match capturer.frame(spf) {
+                        Ok(scrap::Frame::PixelBuffer(pb)) => {
+                            let rgba = pb.data();
+                            let w = pb.width();
+                            let h = pb.height();
+                            if w > 0 && h > 0 && rgba.len() >= w * h * 4 {
+                                let mut rgb = Vec::with_capacity(w * h * 3);
+                                for px in rgba.chunks_exact(4) {
+                                    rgb.push(px[0]);
+                                    rgb.push(px[1]);
+                                    rgb.push(px[2]);
+                                }
+                                let mut jpeg = Vec::new();
+                                let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(
+                                    &mut jpeg, 50,
+                                );
+                                if enc
+                                    .encode(&rgb, w as u32, h as u32, image::ColorType::Rgb8)
+                                    .is_ok()
+                                {
+                                    let mut msg = Message::new();
+                                    msg.set_tether_camera_frame(TetherCameraFrame {
+                                        jpeg: jpeg.into(),
+                                        width: w as i32,
+                                        height: h as i32,
+                                        ..Default::default()
+                                    });
+                                    tx_msg.send(Data::Message(msg)).ok();
+                                }
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(e) => {
+                            log::debug!("Tether: camera frame error: {}", e);
+                        }
+                    }
+                    std::thread::sleep(spf);
+                }
+            });
+            return Some(tx);
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
         {
             None
         }
@@ -1788,6 +1888,30 @@ impl<T: InvokeUiSession> Remote<T> {
                             }
                             Ok(Permission::Audio) => {
                                 self.handler.set_permission("audio", p.enabled);
+                            }
+                            Ok(Permission::RemoteMic) => {
+                                // Tether: the controlled side allowed our microphone.
+                                // Start/stop forwarding the local mic to it (reusing
+                                // the voice-call capture path).
+                                if p.enabled {
+                                    if self.stop_mic_forward_sender.is_none() {
+                                        self.stop_mic_forward_sender = self.start_voice_call();
+                                    }
+                                } else if let Some(s) = self.stop_mic_forward_sender.take() {
+                                    s.send(()).ok();
+                                }
+                            }
+                            Ok(Permission::RemoteCamera) => {
+                                // Tether: the controlled side allowed our webcam.
+                                // Start/stop capturing and forwarding it.
+                                if p.enabled {
+                                    if self.stop_camera_forward_sender.is_none() {
+                                        self.stop_camera_forward_sender =
+                                            self.start_camera_forward();
+                                    }
+                                } else if let Some(s) = self.stop_camera_forward_sender.take() {
+                                    s.send(()).ok();
+                                }
                             }
                             Ok(Permission::File) => {
                                 *self.handler.server_file_transfer_enabled.write().unwrap() =

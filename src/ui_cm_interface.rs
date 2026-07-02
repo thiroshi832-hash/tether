@@ -196,6 +196,13 @@ pub trait InvokeUiCM: Send + Clone + 'static + Sized {
     fn update_voice_call_state(&self, client: &Client);
 
     fn file_transfer_log(&self, action: &str, log: &str);
+
+    // Tether: raise/show the connection-manager window on demand (from the tray).
+    fn show_cm(&self);
+
+    // Tether: a forwarded webcam frame (JPEG) from the connecting user, to be
+    // shown in the CM window. Default no-op so non-Flutter UIs need not implement.
+    fn update_camera_frame(&self, _id: i32, _data: &[u8], _width: i32, _height: i32) {}
 }
 
 impl<T: InvokeUiCM> Deref for ConnectionManager<T> {
@@ -573,6 +580,11 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                 Data::ChatMessage { text } => {
                                     self.cm.new_message(self.conn_id, text);
                                 }
+                                // Tether: tray requested to raise this connection's info window.
+                                #[cfg(windows)]
+                                Data::ShowCM(_) => {
+                                    self.cm.ui_handler.show_cm();
+                                }
                                 Data::SwitchPermission { name, enabled } => {
                                     // Keep this branch scoped to privacy mode rollback.
                                     // Other CM permission toggles are updated optimistically by the UI itself.
@@ -658,6 +670,9 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                 }
                                 Data::VoiceCallIncoming => {
                                     self.cm.voice_call_incoming(self.conn_id);
+                                }
+                                Data::CameraFrame { id, data, width, height } => {
+                                    self.cm.update_camera_frame(id, &data, width, height);
                                 }
                                 Data::CloseVoiceCall(reason) => {
                                     self.cm.voice_call_closed(self.conn_id, reason.as_str());
@@ -946,6 +961,9 @@ pub async fn start_listen<T: InvokeUiCM>(
             }
             Some(Data::VoiceCallIncoming) => {
                 cm.voice_call_incoming(current_id);
+            }
+            Some(Data::CameraFrame { id, data, width, height }) => {
+                cm.update_camera_frame(id, &data, width, height);
             }
             Some(Data::CloseVoiceCall(reason)) => {
                 cm.voice_call_closed(current_id, reason.as_str());

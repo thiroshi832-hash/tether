@@ -26,7 +26,16 @@ import '../../common.dart';
 import '../../models/platform_model.dart';
 
 class PeerTabPage extends StatefulWidget {
-  const PeerTabPage({Key? key}) : super(key: key);
+  // Tether: when true, hide the internal tab-bar/actions header (navigation is
+  // provided by the Tether sidebar instead).
+  final bool hideHeader;
+  // Tether: hide only the tab-icon strip (recent/favorite/discovered/address
+  // book/LAN) while keeping the right-side actions (search/select/view type).
+  // Those tabs are reachable from the Tether sidebar instead.
+  final bool hideTabBar;
+  const PeerTabPage(
+      {Key? key, this.hideHeader = false, this.hideTabBar = false})
+      : super(key: key);
   @override
   State<PeerTabPage> createState() => _PeerTabPageState();
 }
@@ -109,7 +118,8 @@ class _PeerTabPageState extends State<PeerTabPage>
       textBaseline: TextBaseline.ideographic,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Obx(() => SizedBox(
+        if (!widget.hideHeader)
+          Obx(() => SizedBox(
               height: 32,
               child: Container(
                 padding: stateGlobal.isPortrait.isTrue
@@ -119,8 +129,10 @@ class _PeerTabPageState extends State<PeerTabPage>
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Expanded(
-                        child: visibleContextMenuListener(
-                            _createSwitchBar(context))),
+                        child: widget.hideTabBar
+                            ? const SizedBox.shrink()
+                            : visibleContextMenuListener(
+                                _createSwitchBar(context))),
                     if (stateGlobal.isPortrait.isTrue)
                       ..._portraitRightActions(context)
                     else

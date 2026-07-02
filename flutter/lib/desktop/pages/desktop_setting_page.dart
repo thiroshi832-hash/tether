@@ -29,7 +29,7 @@ import '../../common/widgets/login.dart';
 
 const double _kTabWidth = 200;
 const double _kTabHeight = 42;
-const double _kCardFixedWidth = 540;
+const double _kCardFixedWidth = 640;
 const double _kCardLeftMargin = 15;
 const double _kContentHMargin = 15;
 const double _kContentHSubMargin = _kContentHMargin + 33;
@@ -276,8 +276,13 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    // Tether: match the dark home palette (see tether_home_page.dart).
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final pageBg = isDark
+        ? const Color(0xFF0A0D13)
+        : Theme.of(context).colorScheme.background;
     return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.background,
+      backgroundColor: pageBg,
       body: _buildBlock(
         children: <Widget>[
           SizedBox(
@@ -292,7 +297,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
           const VerticalDivider(width: 1),
           Expanded(
             child: Container(
-              color: Theme.of(context).scaffoldBackgroundColor,
+              color: pageBg,
               child: PageView(
                 controller: controller,
                 physics: NeverScrollableScrollPhysics(),
@@ -2506,12 +2511,24 @@ Widget _Card(
     {required String title,
     required List<Widget> children,
     List<Widget>? title_suffix}) {
-  return Row(
-    children: [
-      Flexible(
-        child: SizedBox(
-          width: _kCardFixedWidth,
-          child: Card(
+  // Tether: flat card matching the dark home (no elevation/shadow), with a
+  // subtle border. Falls back to the light palette when not in dark mode.
+  return Builder(builder: (context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardBg = isDark ? const Color(0xFF11161F) : Colors.white;
+    final borderColor =
+        isDark ? const Color(0xFF1F2734) : const Color(0xFFE6E8EC);
+    return Row(
+      children: [
+        // Tether: fill the available pane width instead of a fixed width, so
+        // there is no blank space to the right of each card.
+        Expanded(
+          child: Container(
+            decoration: BoxDecoration(
+              color: cardBg,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: borderColor),
+            ),
             child: Column(
               children: [
                 Row(
@@ -2531,11 +2548,12 @@ Widget _Card(
                     .map((e) => e.marginOnly(top: 4, right: _kContentHMargin)),
               ],
             ).marginOnly(bottom: 10),
-          ).marginOnly(left: _kCardLeftMargin, top: 15),
+          ).marginOnly(
+              left: _kCardLeftMargin, right: _kContentHMargin, top: 15),
         ),
-      ),
-    ],
-  );
+      ],
+    );
+  });
 }
 
 // ignore: non_constant_identifier_names

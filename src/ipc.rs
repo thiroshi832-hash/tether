@@ -323,6 +323,14 @@ pub enum Data {
         name: String,
         enabled: bool,
     },
+    // Tether: a webcam frame (JPEG) forwarded from the connecting user, routed
+    // to the CM window for display.
+    CameraFrame {
+        id: i32,
+        data: Vec<u8>,
+        width: i32,
+        height: i32,
+    },
     SystemInfo(Option<String>),
     ClickTime(i64),
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -384,6 +392,14 @@ pub enum Data {
     FileTransferLog((String, String)),
     #[cfg(windows)]
     ControlledSessionCount(usize),
+    // Tether: full list of active controlled sessions for the tray menu.
+    // Each entry is (conn_id, peer_name, peer_id). Sent service -> tray.
+    #[cfg(windows)]
+    ControlledSessions(Vec<(i32, String, String)>),
+    // Tether: tray -> service request to show the connection-manager window
+    // for the given conn_id (used by the per-connection tray menu entries).
+    #[cfg(windows)]
+    ShowCM(i32),
     CmErr(String),
     // CM-side file reading responses (Windows only)
     // These are sent from CM back to Connection when CM handles file reading
@@ -999,6 +1015,18 @@ async fn handle(data: Data, stream: &mut Connection) {
                     ))
                     .await
             );
+            // Tether: also push the labeled connection list for the tray menu.
+            allow_err!(
+                stream
+                    .send(&Data::ControlledSessions(
+                        crate::Connection::authed_conns_info()
+                    ))
+                    .await
+            );
+        }
+        #[cfg(windows)]
+        Data::ShowCM(conn_id) => {
+            crate::Connection::show_cm_for_conn(conn_id);
         }
         #[cfg(all(
             feature = "flutter",

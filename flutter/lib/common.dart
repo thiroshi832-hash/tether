@@ -1894,18 +1894,24 @@ Future _saveSessionWindowPosition(WindowType windowType, int windowId,
   }
 }
 
-Future<Size> _adjustRestoreMainWindowSize(double? width, double? height) async {
+Future<Size> _adjustRestoreMainWindowSize(double? width, double? height,
+    {WindowType? windowType}) async {
   const double minWidth = 1;
   const double minHeight = 1;
   const double maxWidth = 6480;
   const double maxHeight = 6480;
 
-  final defaultWidth =
-      ((isDesktop || isWebDesktop) ? 1280 : kMobileDefaultDisplayWidth)
-          .toDouble();
-  final defaultHeight =
-      ((isDesktop || isWebDesktop) ? 720 : kMobileDefaultDisplayHeight)
-          .toDouble();
+  // Tether: the main (home) window opens compact to fit the Tether layout;
+  // other window types (remote desktop, file transfer, ...) keep the larger default.
+  final isMainWindow = windowType == WindowType.Main;
+  final defaultWidth = ((isDesktop || isWebDesktop)
+          ? (isMainWindow ? 1209 : 1280)
+          : kMobileDefaultDisplayWidth)
+      .toDouble();
+  final defaultHeight = ((isDesktop || isWebDesktop)
+          ? (isMainWindow ? 890 : 720)
+          : kMobileDefaultDisplayHeight)
+      .toDouble();
   double restoreWidth = width ?? defaultWidth;
   double restoreHeight = height ?? defaultHeight;
 
@@ -2058,7 +2064,8 @@ Future<bool> restoreWindowPosition(WindowType type,
     }
   }
 
-  final size = await _adjustRestoreMainWindowSize(lpos.width, lpos.height);
+  final size =
+      await _adjustRestoreMainWindowSize(lpos.width, lpos.height, windowType: type);
   final offsetLeftTop = await _adjustRestoreMainWindowOffset(
     lpos.offsetWidth,
     lpos.offsetHeight,

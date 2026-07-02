@@ -73,6 +73,10 @@ impl InvokeUiCM for SciterHandler {
     }
 
     fn file_transfer_log(&self, _action: &str, _log: &str) {}
+
+    fn show_cm(&self) {
+        // Tether: legacy Sciter UI; not wired to on-demand show.
+    }
 }
 
 impl SciterHandler {

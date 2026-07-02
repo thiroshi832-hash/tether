@@ -92,6 +92,15 @@ fn make_tray() -> hbb_common::ResultType<()> {
     let tray_channel = TrayEvent::receiver();
     #[cfg(windows)]
     let (ipc_sender, ipc_receiver) = std::sync::mpsc::channel::<Data>();
+    // Tether: event-loop -> ipc-thread channel carrying "show this connection's CM
+    // window" clicks, plus the dynamic per-connection menu items (MenuItem, conn_id)
+    // and the last-seen list (to avoid rebuilding the menu every poll).
+    #[cfg(windows)]
+    let (showcm_sender, showcm_receiver) = std::sync::mpsc::channel::<i32>();
+    #[cfg(windows)]
+    let mut conn_items: Vec<(MenuItem, i32)> = Vec::new();
+    #[cfg(windows)]
+    let mut last_conn: Vec<(i32, String, String)> = Vec::new();
 
     let open_func = move || {
         if cfg!(not(feature = "flutter")) {
@@ -121,7 +130,7 @@ fn make_tray() -> hbb_common::ResultType<()> {
 
     #[cfg(windows)]
     std::thread::spawn(move || {
-        start_query_session_count(ipc_sender.clone());
+        start_query_session_count(ipc_sender.clone(), showcm_receiver);
     });
     #[cfg(windows)]
     let mut last_click = std::time::Instant::now();
@@ -194,6 +203,12 @@ fn make_tray() -> hbb_common::ResultType<()> {
             } else if event.id == open_i.id() {
                 open_func();
             }
+            // Tether: clicking a per-connection entry asks the service to show that
+            // connection's info (CM) window.
+            #[cfg(windows)]
+            if let Some((_, conn_id)) = conn_items.iter().find(|(mi, _)| event.id == *mi.id()) {
+                let _ = showcm_sender.send(*conn_id);
+            }
         }
 
         if let Ok(_event) = tray_channel.try_recv() {
@@ -228,6 +243,20 @@ fn make_tray() -> hbb_common::ResultType<()> {
                         .as_mut()
                         .map(|t| t.set_tooltip(Some(tooltip(count))));
                 }
+                // Tether: rebuild the per-connection menu entries labeled "name(peer_id)".
+                Data::ControlledSessions(list) => {
+                    if list != last_conn {
+                        last_conn = list.clone();
+                        for (mi, _) in conn_items.drain(..) {
+                            let _ = tray_menu.remove(&mi);
+                        }
+                        for (conn_id, name, peer_id) in list {
+                            let item = MenuItem::new(format!("{}({})", name, peer_id), true, None);
+                            let _ = tray_menu.append(&item);
+                            conn_items.push((item, conn_id));
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -236,7 +265,10 @@ fn make_tray() -> hbb_common::ResultType<()> {
 
 #[cfg(windows)]
 #[tokio::main(flavor = "current_thread")]
-async fn start_query_session_count(sender: std::sync::mpsc::Sender<Data>) {
+async fn start_query_session_count(
+    sender: std::sync::mpsc::Sender<Data>,
+    showcm_receiver: std::sync::mpsc::Receiver<i32>,
+) {
     let mut last_count = 0;
     loop {
         if let Ok(mut c) = crate::ipc::connect(1000, "").await {
@@ -256,11 +288,19 @@ async fn start_query_session_count(sender: std::sync::mpsc::Sender<Data>) {
                                     sender.send(Data::ControlledSessionCount(count)).ok();
                                 }
                             }
+                            // Tether: forward the labeled connection list to the tray menu.
+                            Ok(Some(Data::ControlledSessions(list))) => {
+                                sender.send(Data::ControlledSessions(list)).ok();
+                            }
                             _ => {}
                         }
                     }
 
                     _ = timer.tick() => {
+                        // Tether: forward pending "show CM window" clicks to the service.
+                        while let Ok(conn_id) = showcm_receiver.try_recv() {
+                            c.send(&Data::ShowCM(conn_id)).await.ok();
+                        }
                         c.send(&Data::ControlledSessionCount(0)).await.ok();
                     }
                 }

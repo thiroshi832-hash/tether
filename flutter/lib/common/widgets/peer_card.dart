@@ -30,12 +30,15 @@ class _PeerCard extends StatefulWidget {
   final PeerTabIndex tab;
   final Function(BuildContext, String) connect;
   final PopupMenuEntryBuilder popupMenuEntryBuilder;
+  // Tether: force a layout for this card, ignoring the global option.
+  final PeerUiType? uiTypeOverride;
 
   const _PeerCard(
       {required this.peer,
       required this.tab,
       required this.connect,
       required this.popupMenuEntryBuilder,
+      this.uiTypeOverride,
       Key? key})
       : super(key: key);
 
@@ -50,6 +53,9 @@ class _PeerCardState extends State<_PeerCard>
   final double _cardRadius = 16;
   final double _tileRadius = 5;
   final double _borderWidth = 2;
+
+  // Tether: effective layout — per-card override, else the global option.
+  PeerUiType get _uiType => widget.uiTypeOverride ?? peerCardUiType.value;
 
   @override
   Widget build(BuildContext context) {
@@ -97,7 +103,7 @@ class _PeerCardState extends State<_PeerCard>
       BoxDecoration(
         border: Border.all(color: Colors.transparent, width: _borderWidth),
         borderRadius: BorderRadius.circular(
-          peerCardUiType.value == PeerUiType.grid ? _cardRadius : _tileRadius,
+          _uiType == PeerUiType.grid ? _cardRadius : _tileRadius,
         ),
       ),
     );
@@ -108,7 +114,7 @@ class _PeerCardState extends State<_PeerCard>
               color: Theme.of(context).colorScheme.primary,
               width: _borderWidth),
           borderRadius: BorderRadius.circular(
-            peerCardUiType.value == PeerUiType.grid ? _cardRadius : _tileRadius,
+            _uiType == PeerUiType.grid ? _cardRadius : _tileRadius,
           ),
         );
       },
@@ -116,14 +122,21 @@ class _PeerCardState extends State<_PeerCard>
         deco.value = BoxDecoration(
           border: Border.all(color: Colors.transparent, width: _borderWidth),
           borderRadius: BorderRadius.circular(
-            peerCardUiType.value == PeerUiType.grid ? _cardRadius : _tileRadius,
+            _uiType == PeerUiType.grid ? _cardRadius : _tileRadius,
           ),
         );
       },
       child: gestureDetector(
-          child: Obx(() => peerCardUiType.value == PeerUiType.grid
-              ? _buildPeerCard(context, peer, deco)
-              : _buildPeerTile(context, peer, deco))),
+          // Tether: with an explicit override there is no observable to watch,
+          // so wrapping in Obx would throw "improper use of Obx". Only observe
+          // the global option when no override is provided.
+          child: widget.uiTypeOverride != null
+              ? (_uiType == PeerUiType.grid
+                  ? _buildPeerCard(context, peer, deco)
+                  : _buildPeerTile(context, peer, deco))
+              : Obx(() => peerCardUiType.value == PeerUiType.grid
+                  ? _buildPeerCard(context, peer, deco)
+                  : _buildPeerTile(context, peer, deco))),
     );
   }
 
@@ -221,7 +234,7 @@ class _PeerCardState extends State<_PeerCard>
                                     textAlign: TextAlign.start,
                                     overflow: TextOverflow.ellipsis,
                                   ).marginOnly(
-                                      left: peerCardUiType.value ==
+                                      left: _uiType ==
                                               PeerUiType.list
                                           ? 32
                                           : 4),
@@ -507,9 +520,15 @@ abstract class BasePeerCard extends StatelessWidget {
   final Peer peer;
   final PeerTabIndex tab;
   final EdgeInsets? menuPadding;
+  // Tether: force a layout for this card, ignoring the global option.
+  final PeerUiType? uiTypeOverride;
 
   BasePeerCard(
-      {required this.peer, required this.tab, this.menuPadding, Key? key})
+      {required this.peer,
+      required this.tab,
+      this.menuPadding,
+      this.uiTypeOverride,
+      Key? key})
       : super(key: key);
 
   @override
@@ -520,6 +539,7 @@ abstract class BasePeerCard extends StatelessWidget {
       connect: (BuildContext context, String id) =>
           connectInPeerTab(context, peer, tab),
       popupMenuEntryBuilder: _buildPopupMenuEntry,
+      uiTypeOverride: uiTypeOverride,
     );
   }
 
@@ -956,11 +976,16 @@ abstract class BasePeerCard extends StatelessWidget {
 }
 
 class RecentPeerCard extends BasePeerCard {
-  RecentPeerCard({required Peer peer, EdgeInsets? menuPadding, Key? key})
+  RecentPeerCard(
+      {required Peer peer,
+      EdgeInsets? menuPadding,
+      PeerUiType? uiTypeOverride,
+      Key? key})
       : super(
             peer: peer,
             tab: PeerTabIndex.recent,
             menuPadding: menuPadding,
+            uiTypeOverride: uiTypeOverride,
             key: key);
 
   @override

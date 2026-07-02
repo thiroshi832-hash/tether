@@ -209,11 +209,17 @@ pub async fn create_tcp_connection(
         let sk = sign::SecretKey(sk_);
         let mut msg_out = Message::new();
         let (our_pk_b, our_sk_b) = box_::gen_keypair();
+        // Suite-1 ephemeral X25519 key, advertised alongside the legacy box key.
+        // Kept in scope until the peer replies so we can complete the ECDH.
+        let ecdh = hbb_common::crypto::EcdhHalf::new();
+        let our_suite1_pub = ecdh.public;
         msg_out.set_signed_id(SignedId {
             id: sign::sign(
                 &IdPk {
                     id: Config::get_id(),
                     pk: Bytes::from(our_pk_b.0.to_vec()),
+                    crypto_suites: hbb_common::crypto::advertised_suite_ids(),
+                    suite1_pk: Bytes::from(our_suite1_pub.to_vec()),
                     ..Default::default()
                 }
                 .write_to_bytes()
@@ -229,7 +235,31 @@ pub async fn create_tcp_connection(
                 let bytes = res?;
                 if let Ok(msg_in) = Message::parse_from_bytes(&bytes) {
                     if let Some(message::Union::PublicKey(pk)) = msg_in.union {
-                        if pk.asymmetric_value.len() == box_::PUBLICKEYBYTES {
+                        let chosen = hbb_common::crypto::CryptoSuite::from_u32(pk.crypto_suite);
+                        if chosen
+                            == Some(hbb_common::crypto::CryptoSuite::X25519XChaCha20Poly1305)
+                            && pk.asymmetric_value.len() == 32
+                        {
+                            // Defense in depth: refuse a suite we never advertised.
+                            // (The HKDF transcript binding already fails closed on
+                            // tampering, but reject early and explicitly.)
+                            if !hbb_common::crypto::advertised_suite_ids()
+                                .contains(&pk.crypto_suite)
+                            {
+                                bail!("Handshake failed: peer chose an unadvertised suite");
+                            }
+                            let mut their = [0u8; 32];
+                            their.copy_from_slice(&pk.asymmetric_value);
+                            // We are the responder; peer is the initiator.
+                            let key = ecdh.finish(
+                                &their,
+                                hbb_common::crypto::CryptoSuite::X25519XChaCha20Poly1305,
+                                &our_suite1_pub,
+                                &their,
+                                Config::get_id().as_bytes(),
+                            )?;
+                            stream.set_key_suite1(key);
+                        } else if pk.asymmetric_value.len() == box_::PUBLICKEYBYTES {
                             stream.set_key(tcp::Encrypt::decode(
                                 &pk.symmetric_value,
                                 &pk.asymmetric_value,

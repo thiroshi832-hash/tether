@@ -313,6 +313,9 @@ pub struct Connection {
     recording: bool,
     block_input: bool,
     privacy_mode: bool,
+    // Tether: allow the connecting user's own camera/mic to be used here.
+    remote_camera: bool,
+    remote_mic: bool,
     control_permissions: Option<ControlPermissions>,
     last_test_delay: Option<Instant>,
     network_delay: u32,
@@ -512,6 +515,9 @@ impl Connection {
             recording: Self::permission(keys::OPTION_ENABLE_RECORD_SESSION, &control_permissions),
             block_input: Self::permission(keys::OPTION_ENABLE_BLOCK_INPUT, &control_permissions),
             privacy_mode: Self::permission(keys::OPTION_ENABLE_PRIVACY_MODE, &control_permissions),
+            // Tether: off by default; the controlled user opts in from the CM window.
+            remote_camera: false,
+            remote_mic: false,
             control_permissions,
             last_test_delay: None,
             network_delay: 0,
@@ -802,6 +808,14 @@ impl Connection {
                                 }
                                 conn.privacy_mode = enabled;
                                 conn.send_permission(Permission::PrivacyMode, enabled).await;
+                            } else if &name == "remote_camera" {
+                                // Tether: tell the peer it may send its webcam.
+                                conn.remote_camera = enabled;
+                                conn.send_permission(Permission::RemoteCamera, enabled).await;
+                            } else if &name == "remote_mic" {
+                                // Tether: tell the peer it may send its microphone.
+                                conn.remote_mic = enabled;
+                                conn.send_permission(Permission::RemoteMic, enabled).await;
                             }
                         }
                         ipc::Data::RawMessage(bytes) => {
@@ -1045,6 +1059,11 @@ impl Connection {
                             } else {
                                 conn.send_remote_printing_disallowed().await;
                             }
+                        }
+                        // Tether: tray requested to show this connection's CM window; forward to the CM.
+                        #[cfg(windows)]
+                        ipc::Data::ShowCM(_) => {
+                            conn.send_to_cm(ipc::Data::ShowCM(conn.inner.id()));
                         }
                         _ => {}
                     }
@@ -3566,6 +3585,18 @@ impl Connection {
                         }
                     }
                 }
+                Some(message::Union::TetherCameraFrame(frame)) => {
+                    // Tether: only accept the peer's webcam if the controlled
+                    // user allowed it; route the JPEG to the CM window.
+                    if self.remote_camera {
+                        self.send_to_cm(ipc::Data::CameraFrame {
+                            id: self.inner.id(),
+                            data: frame.jpeg.to_vec(),
+                            width: frame.width,
+                            height: frame.height,
+                        });
+                    }
+                }
                 Some(message::Union::VoiceCallRequest(request)) => {
                     if request.is_connect {
                         self.voice_call_request_timestamp = Some(
@@ -5050,6 +5081,33 @@ impl Connection {
         ALIVE_CONNS.lock().unwrap().clone()
     }
 
+    // Tether: (conn_id, name, peer_id) for authorized, non-port-forward connections.
+    // Used to build the per-connection entries in the tray menu.
+    #[cfg(windows)]
+    pub fn authed_conns_info() -> Vec<(i32, String, String)> {
+        AUTHED_CONNS
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| c.conn_type != AuthConnType::PortForward)
+            .map(|c| (c.conn_id, c.name.clone(), c.peer_id.clone()))
+            .collect()
+    }
+
+    // Tether: route a tray "show connection window" request to the matching
+    // connection, which forwards it to its CM to raise the info window.
+    #[cfg(windows)]
+    pub fn show_cm_for_conn(conn_id: i32) {
+        if let Some(c) = AUTHED_CONNS
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|c| c.conn_id == conn_id)
+        {
+            allow_err!(c.sender.send(Data::ShowCM(conn_id)));
+        }
+    }
+
     #[cfg(windows)]
     fn portable_check(&mut self) {
         if self.portable.is_installed || !self.is_remote() || !self.keyboard {
@@ -5978,6 +6036,9 @@ pub struct AuthedConn {
     pub session_key: SessionKey,
     pub sender: mpsc::UnboundedSender<Data>,
     pub printer: bool,
+    // Tether: connector identity, used to label the per-connection tray menu entries.
+    pub name: String,
+    pub peer_id: String,
 }
 
 mod raii {
@@ -6021,6 +6082,8 @@ mod raii {
                 session_key,
                 sender,
                 printer,
+                name: lr.my_name.clone(),
+                peer_id: lr.my_id.clone(),
             });
             Self::check_wake_lock();
             use std::sync::Once;
