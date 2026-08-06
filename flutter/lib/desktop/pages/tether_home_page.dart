@@ -233,7 +233,8 @@ class _TetherHomePageState extends State<TetherHomePage> {
             ),
           ),
           const SizedBox(height: 20),
-          // Recent Sessions preview (max 5); full list lives in the Sessions section.
+          // Recent Sessions preview (max 5). Fills the remaining height so the
+          // window has no bottom blank; the panel is tall enough for all 5 rows.
           Expanded(
             child: _peersCard(
               'Recent Sessions',

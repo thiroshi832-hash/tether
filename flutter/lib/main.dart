@@ -155,11 +155,25 @@ void runMainApp(bool startService) async {
   }
 
   // Set window option.
+  // Tether: give the main window a comfortable default size so the two-column
+  // layout isn't clipped on first run (saved geometry still overrides later).
   WindowOptions windowOptions = getHiddenTitleBarWindowOptions(
-      isMainWindow: true, alwaysOnTop: alwaysOnTop);
+      isMainWindow: true, size: const Size(1000, 900), alwaysOnTop: alwaysOnTop);
   windowManager.waitUntilReadyToShow(windowOptions, () async {
+    // Tether: don't let the user drag the window too small to show the home.
+    await windowManager.setMinimumSize(const Size(960, 820));
     // Restore the location of the main window before window hide or show.
     await restoreWindowPosition(WindowType.Main);
+    // Tether: normalize the home window to a height that fits its content with
+    // no bottom blank, overriding any previously-saved (taller) geometry.
+    try {
+      final s = await windowManager.getSize();
+      const targetH = 900.0;
+      final targetW = s.width < 960 ? 1000.0 : s.width;
+      if ((s.height - targetH).abs() > 2 || s.width != targetW) {
+        await windowManager.setSize(Size(targetW, targetH));
+      }
+    } catch (_) {}
     // Check the startup argument, if we successfully handle the argument, we keep the main window hidden.
     final handledByUniLinks = await initUniLinks();
     debugPrint("handled by uni links: $handledByUniLinks");
@@ -295,13 +309,11 @@ void runConnectionManagerScreen() async {
     const DesktopServerPage(),
     MyTheme.currentThemeMode(),
   );
-  final hide = await bind.cmGetConfig(name: "hide_cm") == 'true';
-  gFFI.serverModel.hideCm = hide;
-  if (hide) {
-    await hideCmWindow(isStartup: true);
-  } else {
-    await showCmWindow(isStartup: true);
-  }
+  // Tether: the info (connection-manager) window never auto-appears. It starts
+  // hidden with no taskbar button and is only opened from the tray connection
+  // entry; its minimize button hides it again.
+  gFFI.serverModel.hideCm = true;
+  await hideCmWindow(isStartup: true);
   setResizable(false);
   // Start the uni links handler and redirect links to Native, not for Flutter.
   listenUniLinks(handleByFlutter: false);
@@ -309,40 +321,30 @@ void runConnectionManagerScreen() async {
 
 bool _isCmReadyToShow = false;
 
-showCmWindow({bool isStartup = false}) async {
-  if (isStartup) {
-    WindowOptions windowOptions = getHiddenTitleBarWindowOptions(
-        size: kConnectionManagerWindowSizeClosedChat, alwaysOnTop: true);
-    await windowManager.waitUntilReadyToShow(windowOptions, null);
-    bind.mainHideDock();
-    await Future.wait([
-      windowManager.show(),
-      windowManager.focus(),
-      windowManager.setOpacity(1)
-    ]);
-    // ensure initial window size to be changed
-    await windowManager.setSizeAlignment(
-        kConnectionManagerWindowSizeClosedChat, Alignment.topRight);
-    _isCmReadyToShow = true;
-  } else if (_isCmReadyToShow) {
-    if (await windowManager.getOpacity() != 1) {
-      await windowManager.setOpacity(1);
-      await windowManager.focus();
-      await windowManager.minimize(); //needed
-      await windowManager.setSizeAlignment(
-          kConnectionManagerWindowSizeClosedChat, Alignment.topRight);
-      windowOnTop(null);
-    }
-  }
+showCmWindow({bool isStartup = false, bool fromTray = false}) async {
+  // Tether: the info window opens ONLY from the tray connection entry. All the
+  // automatic triggers (new connection, chat, voice, file transfer) call this
+  // without fromTray and are intentionally suppressed.
+  if (!fromTray) return;
+  if (!_isCmReadyToShow) return;
+  await windowManager.setSkipTaskbar(true);
+  await windowManager.setOpacity(1);
+  await windowManager.show();
+  await windowManager.focus();
+  await windowManager.setSizeAlignment(
+      kConnectionManagerWindowSizeClosedChat, Alignment.topRight);
+  windowOnTop(null);
 }
 
 hideCmWindow({bool isStartup = false}) async {
   if (isStartup) {
+    // Tether: no taskbar button for the info window.
     WindowOptions windowOptions = getHiddenTitleBarWindowOptions(
-        size: kConnectionManagerWindowSizeClosedChat);
+        size: kConnectionManagerWindowSizeClosedChat, skipTaskbar: true);
     windowManager.setOpacity(0);
     await windowManager.waitUntilReadyToShow(windowOptions, null);
     bind.mainHideDock();
+    await windowManager.setSkipTaskbar(true);
     await windowManager.minimize();
     await windowManager.hide();
     _isCmReadyToShow = true;
@@ -408,7 +410,8 @@ WindowOptions getHiddenTitleBarWindowOptions(
     {bool isMainWindow = false,
     Size? size,
     bool center = false,
-    bool? alwaysOnTop}) {
+    bool? alwaysOnTop,
+    bool skipTaskbar = false}) {
   var defaultTitleBarStyle = TitleBarStyle.hidden;
   // we do not hide titlebar on win7 because of the frame overflow.
   if (kUseCompatibleUiMode) {
@@ -418,7 +421,7 @@ WindowOptions getHiddenTitleBarWindowOptions(
     size: size,
     center: center,
     backgroundColor: (isMacOS && isMainWindow) ? null : Colors.transparent,
-    skipTaskbar: false,
+    skipTaskbar: skipTaskbar,
     titleBarStyle: defaultTitleBarStyle,
     alwaysOnTop: alwaysOnTop,
   );

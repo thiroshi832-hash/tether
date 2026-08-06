@@ -290,19 +290,24 @@ def get_features(args):
 
 
 def generate_control_file(version):
-    control_file_path = "../res/DEBIAN/control"
+    # Tether: build.py copies res/DEBIAN-tether/* into tmpdeb/DEBIAN, and the
+    # control file lives alongside those maintainer scripts.
+    control_file_path = "../res/DEBIAN-tether/control"
     system2('/bin/rm -rf %s' % control_file_path)
 
-    content = """Package: rustdesk
+    content = """Package: tether
 Section: net
 Priority: optional
 Version: %s
 Architecture: %s
-Maintainer: rustdesk <info@rustdesk.com>
-Homepage: https://rustdesk.com
-Depends: libgtk-3-0t64 | libgtk-3-0, libxcb-randr0, libxdo3 | libxdo4, libxfixes3, libxcb-shape0, libxcb-xfixes0, libasound2t64 | libasound2, libsystemd0, curl, libva2, libva-drm2, libva-x11-2, libgstreamer-plugins-base1.0-0, libpam0g, gstreamer1.0-pipewire%s
+Maintainer: Tether <tanaka@sonex-digital.com>
+Homepage: https://tether.local
+Depends: libgtk-3-0t64 | libgtk-3-0, libxcb-randr0, libxdo3 | libxdo4, libxfixes3, libxcb-shape0, libxcb-xfixes0, libasound2t64 | libasound2, libsystemd0, curl, libva2, libva-drm2, libva-x11-2, libgstreamer-plugins-base1.0-0, libpam0g, gstreamer1.0-pipewire, pulseaudio-utils, kmod, v4l2loopback-dkms | v4l2loopback-utils, dkms%s
 Recommends: libayatana-appindicator3-1
-Description: A remote control software.
+Description: Tether remote desktop
+ Tether is a remote-desktop client with a bundled virtual camera and
+ virtual microphone that surface the operator's webcam/mic on the controlled
+ machine so conferencing apps can select them as devices.
 
 """ % (version, get_deb_arch(), get_deb_extra_depends())
     file = open(control_file_path, "w")
@@ -317,51 +322,69 @@ def ffi_bindgen_function_refactor():
 
 
 def build_flutter_deb(version, features):
+    # Tether: the Linux .deb installs to /usr/share/tether, ships tether.service,
+    # tether.desktop, PAM `tether`, and outputs tether-<ver>.deb. See
+    # res/DEBIAN-tether/ for maintainer scripts.
     if not skip_cargo:
         system2(f'cargo build --locked --features {features} --lib --release')
         ffi_bindgen_function_refactor()
     os.chdir('flutter')
     system2('flutter build linux --release')
     system2('mkdir -p tmpdeb/usr/bin/')
-    system2('mkdir -p tmpdeb/usr/share/rustdesk')
-    system2('mkdir -p tmpdeb/etc/rustdesk/')
+    system2('mkdir -p tmpdeb/usr/share/tether')
+    system2('mkdir -p tmpdeb/etc/tether/')
     system2('mkdir -p tmpdeb/etc/pam.d/')
-    system2('mkdir -p tmpdeb/usr/share/rustdesk/files/systemd/')
+    system2('mkdir -p tmpdeb/etc/modules-load.d/')
+    system2('mkdir -p tmpdeb/etc/modprobe.d/')
+    system2('mkdir -p tmpdeb/usr/share/tether/files/systemd/')
     system2('mkdir -p tmpdeb/usr/share/icons/hicolor/256x256/apps/')
     system2('mkdir -p tmpdeb/usr/share/icons/hicolor/scalable/apps/')
     system2('mkdir -p tmpdeb/usr/share/applications/')
     system2('mkdir -p tmpdeb/usr/share/polkit-1/actions')
-    system2('rm tmpdeb/usr/bin/rustdesk || true')
+    system2('rm tmpdeb/usr/bin/tether || true')
+    # Flutter Linux runner is `tether` (BINARY_NAME in flutter/linux/CMakeLists.txt)
     system2(
-        f'cp -r {flutter_build_dir}/* tmpdeb/usr/share/rustdesk/')
+        f'cp -r {flutter_build_dir}/* tmpdeb/usr/share/tether/')
     system2(
-        'cp ../res/rustdesk.service tmpdeb/usr/share/rustdesk/files/systemd/')
+        'cp ../res/tether.service tmpdeb/usr/share/tether/files/systemd/')
+    # Tether virtual-mic user service + helper script (see Phase 3).
     system2(
-        'cp ../res/128x128@2x.png tmpdeb/usr/share/icons/hicolor/256x256/apps/rustdesk.png')
+        'cp ../res/tether-vmic.service tmpdeb/usr/share/tether/files/systemd/')
     system2(
-        'cp ../res/scalable.svg tmpdeb/usr/share/icons/hicolor/scalable/apps/rustdesk.svg')
+        'cp ../res/tether-vmic-setup.sh tmpdeb/usr/share/tether/files/')
+    system2('chmod a+x tmpdeb/usr/share/tether/files/tether-vmic-setup.sh')
     system2(
-        'cp ../res/rustdesk.desktop tmpdeb/usr/share/applications/rustdesk.desktop')
+        'cp ../res/128x128@2x.png tmpdeb/usr/share/icons/hicolor/256x256/apps/tether.png')
     system2(
-        'cp ../res/rustdesk-link.desktop tmpdeb/usr/share/applications/rustdesk-link.desktop')
+        'cp ../res/scalable.svg tmpdeb/usr/share/icons/hicolor/scalable/apps/tether.svg')
     system2(
-        'cp ../res/startwm.sh tmpdeb/etc/rustdesk/')
+        'cp ../res/tether.desktop tmpdeb/usr/share/applications/tether.desktop')
     system2(
-        'cp ../res/xorg.conf tmpdeb/etc/rustdesk/')
+        'cp ../res/tether-link.desktop tmpdeb/usr/share/applications/tether-link.desktop')
     system2(
-        'cp ../res/pam.d/rustdesk.debian tmpdeb/etc/pam.d/rustdesk')
+        'cp ../res/startwm.sh tmpdeb/etc/tether/')
     system2(
-        "echo \"#!/bin/sh\" >> tmpdeb/usr/share/rustdesk/files/polkit && chmod a+x tmpdeb/usr/share/rustdesk/files/polkit")
+        'cp ../res/xorg.conf tmpdeb/etc/tether/')
+    system2(
+        'cp ../res/pam.d/tether.debian tmpdeb/etc/pam.d/tether')
+    # Tether virtual camera: auto-load v4l2loopback with a fixed video_nr and
+    # a friendly card_label. See src/virtual_camera/linux.rs.
+    system2(
+        'cp ../res/tether-vcam.modules-load.conf tmpdeb/etc/modules-load.d/tether-vcam.conf')
+    system2(
+        'cp ../res/tether-vcam.modprobe.conf tmpdeb/etc/modprobe.d/tether-vcam.conf')
+    system2(
+        "echo \"#!/bin/sh\" >> tmpdeb/usr/share/tether/files/polkit && chmod a+x tmpdeb/usr/share/tether/files/polkit")
 
     system2('mkdir -p tmpdeb/DEBIAN')
     generate_control_file(version)
-    system2('cp -a ../res/DEBIAN/* tmpdeb/DEBIAN/')
+    system2('cp -a ../res/DEBIAN-tether/* tmpdeb/DEBIAN/')
     md5_file_folder("tmpdeb/")
-    system2('dpkg-deb -b tmpdeb rustdesk.deb;')
+    system2('dpkg-deb -b tmpdeb tether.deb;')
 
     system2('/bin/rm -rf tmpdeb/')
-    system2('/bin/rm -rf ../res/DEBIAN/control')
-    os.rename('rustdesk.deb', '../rustdesk-%s.deb' % version)
+    system2('/bin/rm -rf ../res/DEBIAN-tether/control')
+    os.rename('tether.deb', '../tether-%s.deb' % version)
     os.chdir("..")
 
 
@@ -403,6 +426,9 @@ def build_deb_from_folder(version, binary_folder):
 
 
 def build_flutter_dmg(version, features):
+    # Tether: the macOS app is Tether.app (PRODUCT_NAME=Tether in
+    # flutter/macos/Runner/Configs/AppInfo.xcconfig) with bundle id
+    # com.tether.tether. Output is tether-<ver>.dmg. See docs/build-macos.md.
     if not skip_cargo:
         # set minimum osx build target, now is 10.14, which is the same as the flutter xcode project
         system2(
@@ -415,14 +441,36 @@ def build_flutter_dmg(version, features):
     # so the universal-by-default ARCHS_STANDARD doesn't try to link a missing slice.
     # FLUTTER_XCODE_* env vars are forwarded to xcodebuild as build settings.
     mac_arch = 'arm64' if platform.machine().lower() in ('arm64', 'aarch64') else 'x86_64'
+    # Tether: ad-hoc (unsigned) build. The committed project references the
+    # upstream RustDesk DEVELOPMENT_TEAM with automatic signing, which fails for
+    # anyone outside that team. Override to ad-hoc ("-") manual signing with no
+    # team so the app builds and runs locally. To ship a signed/notarized build,
+    # set P= / your own team instead (see docs/build-macos.md).
+    signing = (
+        'FLUTTER_XCODE_CODE_SIGN_STYLE=Manual '
+        'FLUTTER_XCODE_DEVELOPMENT_TEAM= '
+        'FLUTTER_XCODE_CODE_SIGN_IDENTITY=- '
+        'FLUTTER_XCODE_PROVISIONING_PROFILE_SPECIFIER='
+    )
     system2(
-        f'FLUTTER_XCODE_ARCHS={mac_arch} FLUTTER_XCODE_ONLY_ACTIVE_ARCH=YES flutter build macos --release')
-    system2('cp -rf ../target/release/service ./build/macos/Build/Products/Release/RustDesk.app/Contents/MacOS/')
-    '''
+        f'{signing}FLUTTER_XCODE_ARCHS={mac_arch} FLUTTER_XCODE_ONLY_ACTIVE_ARCH=YES flutter build macos --release')
+    app = './build/macos/Build/Products/Release/Tether.app'
+    # The `service` helper binary is optional; don't fail the whole build if the
+    # cargo profile didn't produce it.
     system2(
-        "create-dmg --volname \"RustDesk Installer\" --window-pos 200 120 --window-size 800 400 --icon-size 100 --app-drop-link 600 185 --icon RustDesk.app 200 190 --hide-extension RustDesk.app rustdesk.dmg ./build/macos/Build/Products/Release/RustDesk.app")
-    os.rename("rustdesk.dmg", f"../rustdesk-{version}.dmg")
-    '''
+        f'cp -rf ../target/release/service {app}/Contents/MacOS/ || true')
+    # Package a .dmg. Requires `brew install create-dmg` (the andreyvit variant).
+    # Non-fatal: if create-dmg is missing, the .app is still built and usable.
+    if shutil.which('create-dmg'):
+        system2(
+            'create-dmg --volname "Tether Installer" --window-pos 200 120 '
+            '--window-size 800 400 --icon-size 100 --app-drop-link 600 185 '
+            f'--icon Tether.app 200 190 --hide-extension Tether.app tether.dmg {app}')
+        os.rename('tether.dmg', f'../tether-{version}.dmg')
+        print(f'output location: {os.path.abspath(os.path.join(os.pardir, f"tether-{version}.dmg"))}')
+    else:
+        print('WARN: create-dmg not found (brew install create-dmg); '
+              f'skipping .dmg. App bundle at flutter/{app[2:]}')
     os.chdir("..")
 
 
@@ -448,24 +496,50 @@ def build_flutter_windows(version, features, skip_portable_pack):
     os.chdir('..')
     shutil.copy2('target/release/deps/dylib_virtual_display.dll',
                  flutter_build_dir_2)
+    # Tether: bundle the virtual camera DirectShow filter if it has been built
+    # (see libs/virtual_camera/README.md). Non-fatal if absent so the main
+    # build isn't blocked on the separate C++ toolchain.
+    for _vcam in ('build/vcam/Release/tether_vcam.dll',
+                  'libs/virtual_camera/prebuilt/tether_vcam.dll'):
+        if os.path.exists(_vcam):
+            shutil.copy2(_vcam, flutter_build_dir_2)
+            break
+    else:
+        print('WARN: tether_vcam.dll not found; virtual camera will be '
+              'unavailable. Build libs/virtual_camera first.')
+    # Tether: bundle the signed virtual audio (virtual mic) driver package, if
+    # present, into a "tether_audio" folder next to the exe (see
+    # libs/virtual_audio/README.md). Non-fatal if absent.
+    _audio_pkg = 'libs/virtual_audio/prebuilt'
+    if os.path.isdir(_audio_pkg) and os.path.exists(
+            os.path.join(_audio_pkg, 'tether_audio.sys')):
+        _dst = os.path.join(flutter_build_dir_2, 'tether_audio')
+        shutil.rmtree(_dst, ignore_errors=True)
+        shutil.copytree(_audio_pkg, _dst)
+    else:
+        print('WARN: signed virtual audio driver not found under '
+              f'{_audio_pkg}; virtual microphone will be unavailable.')
     if skip_portable_pack:
         return
     os.chdir('libs/portable')
     system2('pip3 install -r requirements.txt')
+    # Tether: the flutter runner exe is tether.exe (BINARY_NAME=tether), so the
+    # portable packer must point at it — pointing at rustdesk.exe makes the
+    # packed app fail to launch (loader window flashes then exits).
     system2(
-        f'python3 ./generate.py -f ../../{flutter_build_dir_2} -o . -e ../../{flutter_build_dir_2}/rustdesk.exe')
+        f'python3 ./generate.py -f ../../{flutter_build_dir_2} -o . -e ../../{flutter_build_dir_2}/tether.exe')
     os.chdir('../..')
-    if os.path.exists('./rustdesk_portable.exe'):
+    if os.path.exists('./tether_portable.exe'):
         os.replace('./target/release/rustdesk-portable-packer.exe',
-                   './rustdesk_portable.exe')
+                   './tether_portable.exe')
     else:
         os.rename('./target/release/rustdesk-portable-packer.exe',
-                  './rustdesk_portable.exe')
+                  './tether_portable.exe')
     print(
-        f'output location: {os.path.abspath(os.curdir)}/rustdesk_portable.exe')
-    os.rename('./rustdesk_portable.exe', f'./rustdesk-{version}-install.exe')
+        f'output location: {os.path.abspath(os.curdir)}/tether_portable.exe')
+    os.replace('./tether_portable.exe', f'./tether-{version}-install.exe')
     print(
-        f'output location: {os.path.abspath(os.curdir)}/rustdesk-{version}-install.exe')
+        f'output location: {os.path.abspath(os.curdir)}/tether-{version}-install.exe')
 
 
 def main():

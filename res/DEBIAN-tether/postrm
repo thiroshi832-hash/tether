@@ -1,0 +1,12 @@
+#!/bin/bash
+
+set -e
+
+case $1 in
+    purge)
+        rm -rf /root/.config/Tether || true
+        rm -rf /root/.config/tether || true
+        ;;
+esac
+
+exit 0

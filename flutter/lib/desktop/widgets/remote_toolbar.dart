@@ -485,6 +485,53 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
   int _dockingOptionSyncSerial = 0;
   int _dragEpoch = 0;
 
+  // Tether: fullscreen auto-hide. In fullscreen the toolbar is hidden until the
+  // mouse touches its docked edge, then conceals again shortly after the mouse
+  // leaves. `_revealTop` holds the reveal state; `_concealTimer` debounces it.
+  final _revealTop = false.obs;
+  Timer? _concealTimer;
+
+  // Tether: auto-hide the toolbar whenever the remote window fills the screen —
+  // either true fullscreen or a maximized window.
+  bool get _autoHideActive =>
+      stateGlobal.fullscreen.isTrue || stateGlobal.isMaximized.isTrue;
+
+  void _reveal() {
+    _concealTimer?.cancel();
+    _revealTop.value = true;
+    // Note: don't force-expand here — reveal shows the toolbar in its current
+    // state (the compact bar by default); the user expands it if they want.
+  }
+
+  void _scheduleConceal() {
+    _concealTimer?.cancel();
+    _concealTimer = Timer(const Duration(milliseconds: 500), () {
+      if (_autoHideActive) _revealTop.value = false;
+    });
+  }
+
+  // A thin hover strip along the toolbar's docked edge that reveals it.
+  Widget _buildRevealZone(_ToolbarEdge edge) {
+    const t = 8.0;
+    final region = MouseRegion(
+      opaque: false,
+      onEnter: (_) => _reveal(),
+      onExit: (_) => _scheduleConceal(),
+      child: const SizedBox.expand(),
+    );
+    switch (edge) {
+      case _ToolbarEdge.bottom:
+        return Positioned(bottom: 0, left: 0, right: 0, height: t, child: region);
+      case _ToolbarEdge.left:
+        return Positioned(top: 0, bottom: 0, left: 0, width: t, child: region);
+      case _ToolbarEdge.right:
+        return Positioned(top: 0, bottom: 0, right: 0, width: t, child: region);
+      case _ToolbarEdge.top:
+      default:
+        return Positioned(top: 0, left: 0, right: 0, height: t, child: region);
+    }
+  }
+
   int get windowId => stateGlobal.windowId;
 
   void _setFullscreen(bool v) {
@@ -672,7 +719,13 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
   }
 
   _debouncerHideProc(int v) {
-    if (!pin && collapse.isFalse && _isCursorOverImage && _dragging.isFalse) {
+    // Tether: in fullscreen the toolbar fully hides/reveals by edge hover, so
+    // skip the windowed "collapse to handle" behavior there.
+    if (!pin &&
+        collapse.isFalse &&
+        _isCursorOverImage &&
+        _dragging.isFalse &&
+        !_autoHideActive) {
       collapse.value = true;
     }
   }
@@ -680,6 +733,7 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
   @override
   dispose() {
     ++_dockingOptionSyncSerial;
+    _concealTimer?.cancel();
     widget.onEnterOrLeaveImageCleaner(identityHashCode(this));
     super.dispose();
   }
@@ -710,15 +764,32 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
         }
       });
 
-      final toolbar = Align(
-        alignment: _alignmentForEdge(edge, _fraction.value),
-        child: KeyedSubtree(
-          key: _toolbarKey,
-          child: collapse.isFalse
-              ? _buildToolbar(context, edge, isHorizontal)
-              : _buildDraggableCollapse(context, edge, isHorizontal),
-        ),
+      // Tether: when the remote window fills the screen (fullscreen OR
+      // maximized), hide the toolbar until the mouse reaches its docked edge
+      // (reveal zone), then conceal again when the mouse leaves.
+      final autoHide = _autoHideActive;
+      final showToolbar = !autoHide || _revealTop.value;
+      // The hover MouseRegion must wrap ONLY the bar itself — wrapping the
+      // full-size Align made the whole screen count as "hovering the toolbar",
+      // so it never concealed.
+      final barContent = KeyedSubtree(
+        key: _toolbarKey,
+        child: collapse.isFalse
+            ? _buildToolbar(context, edge, isHorizontal)
+            : _buildDraggableCollapse(context, edge, isHorizontal),
       );
+      final Widget toolbarLayer = showToolbar
+          ? Align(
+              alignment: _alignmentForEdge(edge, _fraction.value),
+              child: MouseRegion(
+                onEnter: (_) => _reveal(),
+                onExit: (_) {
+                  if (autoHide) _scheduleConceal();
+                },
+                child: barContent,
+              ),
+            )
+          : const SizedBox.shrink();
 
       // Always return the Stack — even when not dragging — so the toolbar's
       // position in the Element tree stays stable. Wrapping/unwrapping it
@@ -736,7 +807,8 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
               return _buildDragPreview(context, pe, pf, _toolbarSize.value);
             }),
           ),
-          toolbar,
+          if (autoHide) _buildRevealZone(edge),
+          toolbarLayer,
         ],
       );
     });

@@ -76,4 +76,14 @@ pub mod privacy_mode;
 #[cfg(windows)]
 pub mod virtual_display_manager;
 
+// Tether: virtual camera. Windows: DirectShow filter fed via shared memory.
+// Linux: v4l2loopback fed via write(2).
+#[cfg(any(windows, target_os = "linux"))]
+pub mod virtual_camera;
+
+// Tether: virtual microphone. Windows: virtual audio kernel driver. Linux:
+// PulseAudio/PipeWire null sink + remap-source set up via pactl.
+#[cfg(any(windows, target_os = "linux"))]
+pub mod virtual_mic;
+
 mod kcp_stream;

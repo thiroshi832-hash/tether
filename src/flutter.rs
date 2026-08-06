@@ -1559,10 +1559,15 @@ pub mod connection_manager {
 
         fn show_cm(&self) {
             // Tether: ask the CM window (dart) to raise/show itself.
+            log::info!("[tether-showcm] FlutterHandler::show_cm pushing 'show_cm' event to cm stream");
             self.push_event::<&str>("show_cm", &[]);
         }
 
         fn update_camera_frame(&self, id: i32, data: &[u8], width: i32, height: i32) {
+            // Tether: publish into the OS virtual camera so other apps
+            // (Zoom/Teams/…) can select "Tether Camera" as a webcam.
+            #[cfg(any(windows, target_os = "linux"))]
+            crate::virtual_camera::feed_jpeg_frame(data);
             // Tether: base64 the JPEG so it rides the (string) event channel.
             let b64 = crate::common::encode64(data);
             self.push_event(
@@ -1588,8 +1593,16 @@ pub mod connection_manager {
             h.insert("name", json!(name));
 
             if let Some(s) = GLOBAL_EVENT_STREAM.read().unwrap().get(super::APP_TYPE_CM) {
+                if name == "show_cm" {
+                    log::info!("[tether-showcm] push_event: 'cm' stream found, adding event");
+                }
                 s.add(serde_json::ser::to_string(&h).unwrap_or("".to_owned()));
             } else {
+                log::error!(
+                    "[tether-showcm] Push event {} failed. No {} event stream found.",
+                    name,
+                    super::APP_TYPE_CM
+                );
                 println!(
                     "Push event {} failed. No {} event stream found.",
                     name,

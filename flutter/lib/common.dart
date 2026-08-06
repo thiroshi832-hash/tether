@@ -1909,7 +1909,7 @@ Future<Size> _adjustRestoreMainWindowSize(double? width, double? height,
           : kMobileDefaultDisplayWidth)
       .toDouble();
   final defaultHeight = ((isDesktop || isWebDesktop)
-          ? (isMainWindow ? 890 : 720)
+          ? (isMainWindow ? 900 : 720)
           : kMobileDefaultDisplayHeight)
       .toDouble();
   double restoreWidth = width ?? defaultWidth;

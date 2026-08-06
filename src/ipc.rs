@@ -1026,6 +1026,7 @@ async fn handle(data: Data, stream: &mut Connection) {
         }
         #[cfg(windows)]
         Data::ShowCM(conn_id) => {
+            log::info!("[tether-showcm] service ipc received ShowCM({})", conn_id);
             crate::Connection::show_cm_for_conn(conn_id);
         }
         #[cfg(all(

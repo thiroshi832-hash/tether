@@ -191,6 +191,15 @@ class ConnectionManagerState extends State<ConnectionManager>
               showMaximize: false,
               showMinimize: true,
               showClose: true,
+              // Tether: the info window has no taskbar button, so "minimize"
+              // fully hides it (SW_HIDE, not minimize) so it stops capturing
+              // input and can be cleanly reopened from the tray connection entry.
+              onMinimize: () {
+                () async {
+                  await windowManager.setOpacity(0);
+                  await windowManager.hide();
+                }();
+              },
               onWindowCloseButton: handleWindowCloseButton,
               controller: serverModel.tabController,
               selectedBorderColor: MyTheme.accent,

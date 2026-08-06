@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_hbb/common/widgets/peers_view.dart';
 import 'package:flutter_hbb/consts.dart';
+import 'package:flutter_hbb/main.dart' show showCmWindow;
 import 'package:flutter_hbb/models/ab_model.dart';
 import 'package:flutter_hbb/models/chat_model.dart';
 import 'package:flutter_hbb/models/cm_file_model.dart';
@@ -396,9 +397,11 @@ class FfiModel with ChangeNotifier {
       } else if (name == 'on_client_remove') {
         parent.target?.serverModel.onClientRemove(evt);
       } else if (name == 'show_cm') {
-        // Tether: raise the connection-manager window on demand (from the tray).
-        windowManager.show();
-        windowManager.focus();
+        // Tether: open the info window on demand from the tray. Route through
+        // the purpose-built reveal (skip-taskbar -> opacity -> show -> focus ->
+        // size/alignment -> on-top); a bare restore()+show() is unreliable from
+        // the hidden (SW_HIDE + opacity 0) startup state on Windows.
+        showCmWindow(fromTray: true);
       } else if (name == 'update_quality_status') {
         parent.target?.qualityMonitorModel.updateQualityStatus(evt);
       } else if (name == 'update_block_input_state') {

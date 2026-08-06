@@ -1,0 +1,19 @@
+[Desktop Entry]
+Name=Tether
+GenericName=Remote Desktop
+Comment=Remote Desktop
+Exec=tether %u
+Icon=tether
+Terminal=false
+Type=Application
+StartupNotify=true
+Categories=Network;RemoteAccess;GTK;
+Keywords=internet;linux;dart;rust;remote-control;p2p;remote-desktop;
+Actions=new-window;
+StartupWMClass=tether
+
+X-Desktop-File-Install-Version=0.23
+
+[Desktop Action new-window]
+Name=Open a New Window
+Exec=tether %u

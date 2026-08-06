@@ -207,6 +207,7 @@ fn make_tray() -> hbb_common::ResultType<()> {
             // connection's info (CM) window.
             #[cfg(windows)]
             if let Some((_, conn_id)) = conn_items.iter().find(|(mi, _)| event.id == *mi.id()) {
+                log::info!("[tether-showcm] tray session entry clicked, conn_id={}", conn_id);
                 let _ = showcm_sender.send(*conn_id);
             }
         }
@@ -299,6 +300,7 @@ async fn start_query_session_count(
                     _ = timer.tick() => {
                         // Tether: forward pending "show CM window" clicks to the service.
                         while let Ok(conn_id) = showcm_receiver.try_recv() {
+                            log::info!("[tether-showcm] tray sending ShowCM({}) over ipc", conn_id);
                             c.send(&Data::ShowCM(conn_id)).await.ok();
                         }
                         c.send(&Data::ControlledSessionCount(0)).await.ok();

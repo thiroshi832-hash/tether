@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Tether
+NoDisplay=true
+MimeType=x-scheme-handler/tether;
+TryExec=tether
+Exec=tether %u
+Icon=tether
+Terminal=false
+Type=Application
+StartupNotify=false
+StartupWMClass=tether

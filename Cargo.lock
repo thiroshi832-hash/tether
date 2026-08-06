@@ -3752,7 +3752,6 @@ dependencies = [
  "backtrace",
  "base64 0.22.1",
  "bytes",
- "chacha20poly1305",
  "chrono",
  "clap 4.5.53",
  "confy",
@@ -3765,7 +3764,6 @@ dependencies = [
  "flexi_logger",
  "futures",
  "futures-util",
- "hkdf",
  "httparse",
  "lazy_static",
  "libc",
@@ -3806,7 +3804,6 @@ dependencies = [
  "whoami",
  "winapi 0.3.9",
  "x11 2.21.0",
- "x25519-dalek",
  "zstd 0.13.1",
 ]
 

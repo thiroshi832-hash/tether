@@ -1,0 +1,51 @@
+#!/bin/bash
+
+set -e
+
+if [ "$1" = configure ]; then
+
+    INITSYS=$(ls -al /proc/1/exe | awk -F' ' '{print $NF}' | awk -F'/' '{print $NF}')
+    ln -f -s /usr/share/tether/tether /usr/bin/tether
+
+    if [ "systemd" = "$INITSYS" ]; then
+
+        if [ -e /etc/systemd/system/tether.service ]; then
+            rm /etc/systemd/system/tether.service /usr/lib/systemd/system/tether.service /usr/lib/systemd/user/tether.service >/dev/null 2>&1 || true
+        fi
+        mkdir -p /usr/lib/systemd/system/
+        cp /usr/share/tether/files/systemd/tether.service /usr/lib/systemd/system/tether.service
+        # Ubuntu 18.04 wants absolute paths for ExecStop
+        if [ -e /usr/bin/pkill ]; then
+            sed -i "s|pkill|/usr/bin/pkill|g" /usr/lib/systemd/system/tether.service
+        fi
+        systemctl daemon-reload
+        systemctl enable tether
+        systemctl start tether
+
+        # Tether: install a per-user pactl setup service for the virtual mic
+        # (see /usr/share/tether/files/systemd/tether-vmic.service). Enabled
+        # globally so it auto-starts for every user session.
+        if [ -e /usr/share/tether/files/systemd/tether-vmic.service ]; then
+            mkdir -p /usr/lib/systemd/user/
+            cp /usr/share/tether/files/systemd/tether-vmic.service /usr/lib/systemd/user/tether-vmic.service
+            systemctl --global enable tether-vmic.service >/dev/null 2>&1 || true
+        fi
+    fi
+
+    # Tether: load v4l2loopback now so the virtual camera device shows up
+    # without a reboot. Non-fatal — a reboot (or apt install v4l2loopback-dkms
+    # completing DKMS) still brings it up via modules-load.d.
+    if command -v modprobe >/dev/null 2>&1; then
+        modprobe v4l2loopback >/dev/null 2>&1 || true
+    fi
+
+    # Cache refresh for icons / desktop entries.
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database -q || true
+    fi
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -q /usr/share/icons/hicolor || true
+    fi
+fi
+
+exit 0

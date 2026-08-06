@@ -1,0 +1,32 @@
+#!/bin/bash
+
+set -e
+
+case $1 in
+    remove|upgrade)
+        INITSYS=$(ls -al /proc/1/exe | awk -F' ' '{print $NF}' | awk -F'/' '{print $NF}')
+        rm -f /usr/bin/tether
+
+        if [ "systemd" = "${INITSYS}" ]; then
+
+            systemctl stop tether || true
+            systemctl disable tether || true
+            rm /etc/systemd/system/tether.service /usr/lib/systemd/system/tether.service >/dev/null 2>&1 || true
+
+            # Tether: disable the per-user virtual-mic setup service.
+            systemctl --global disable tether-vmic.service >/dev/null 2>&1 || true
+            rm /usr/lib/systemd/user/tether-vmic.service >/dev/null 2>&1 || true
+
+            # Best-effort clean up of a userland tether server if one is still
+            # running.
+            serverUser=$(ps -ef | grep -E 'tether +--server' | grep -v 'sudo ' | awk '{print $1}' | head -1)
+            if [ "$serverUser" != "" ] && [ "$serverUser" != "root" ]
+            then
+                systemctl --machine=${serverUser}@.host --user stop tether >/dev/null 2>&1 || true
+            fi
+            rm /usr/lib/systemd/user/tether.service >/dev/null 2>&1 || true
+        fi
+        ;;
+esac
+
+exit 0

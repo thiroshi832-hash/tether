@@ -583,6 +583,7 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                 // Tether: tray requested to raise this connection's info window.
                                 #[cfg(windows)]
                                 Data::ShowCM(_) => {
+                                    log::info!("[tether-showcm] cm process received ShowCM, calling ui_handler.show_cm()");
                                     self.cm.ui_handler.show_cm();
                                 }
                                 Data::SwitchPermission { name, enabled } => {

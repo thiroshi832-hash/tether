@@ -1,0 +1,94 @@
+; tether_audio.inf — Tether virtual audio device (virtual microphone).
+;
+; Modeled on the Windows-driver-samples audio/simpleaudiosample INF. Publishes
+; one render endpoint ("Tether Audio") and one capture endpoint
+; ("Tether Microphone"); the driver loops render -> capture. Root-enumerated
+; software device (hardware id Root\TetherAudio).
+;
+; NOTE: must be built + attestation-signed with the matching tether_audio.sys.
+; Keep the service name (tether_audio), hardware id (Root\TetherAudio) and the
+; endpoint friendly names in sync with the driver and src/virtual_mic.rs.
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = MEDIA
+ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+CatalogFile = tether_audio.cat
+DriverVer   = ; set by stampinf / build
+PnpLockdown = 1
+
+[Manufacturer]
+%ProviderName% = TetherAudio,NT$ARCH$.10.0...16299
+
+[TetherAudio.NT$ARCH$.10.0...16299]
+%TetherAudio.DeviceDesc% = TetherAudio_Install,Root\TetherAudio
+
+[SourceDisksNames]
+222 = %DiskId%
+
+[SourceDisksFiles]
+tether_audio.sys = 222
+
+[DestinationDirs]
+DefaultDestDir       = 13   ; DIRID_DRIVERS (driver package dir on modern OS)
+TetherAudio.CopyList = 13
+
+; ============================================================================
+[TetherAudio_Install.NT]
+Include   = ks.inf, wdmaudio.inf
+Needs     = KS.Registration, WDMAUDIO.Registration
+CopyFiles = TetherAudio.CopyList
+AddReg    = TetherAudio_Interfaces.AddReg
+
+[TetherAudio.CopyList]
+tether_audio.sys
+
+[TetherAudio_Install.NT.Services]
+AddService = tether_audio, 0x00000002, TetherAudio_Service
+
+[TetherAudio_Service]
+DisplayName   = %TetherAudio.SvcDesc%
+ServiceType   = 1   ; SERVICE_KERNEL_DRIVER
+StartType     = 3   ; SERVICE_DEMAND_START
+ErrorControl  = 1   ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\tether_audio.sys
+
+; --- Media interface registration: render + capture endpoints ---------------
+[TetherAudio_Install.NT.Interfaces]
+; Render endpoint ("Tether Audio")
+AddInterface = %KSCATEGORY_AUDIO%,  %KSNAME_Render%,  TetherAudio_Render
+AddInterface = %KSCATEGORY_RENDER%, %KSNAME_Render%,  TetherAudio_Render
+; Capture endpoint ("Tether Microphone")
+AddInterface = %KSCATEGORY_AUDIO%,   %KSNAME_Capture%, TetherAudio_Capture
+AddInterface = %KSCATEGORY_CAPTURE%, %KSNAME_Capture%, TetherAudio_Capture
+
+[TetherAudio_Render]
+AddReg = TetherAudio_Render.AddReg
+[TetherAudio_Render.AddReg]
+HKR,,FriendlyName,,%TetherAudio.Render.szPname%
+HKR,,CLSID,,%Proxy.CLSID%
+
+[TetherAudio_Capture]
+AddReg = TetherAudio_Capture.AddReg
+[TetherAudio_Capture.AddReg]
+HKR,,FriendlyName,,%TetherAudio.Capture.szPname%
+HKR,,CLSID,,%Proxy.CLSID%
+
+[TetherAudio_Interfaces.AddReg]
+; placeholder for any device-level interface registry values
+
+[Strings]
+ProviderName                 = "Tether"
+DiskId                       = "Tether Audio Installation Disk"
+TetherAudio.DeviceDesc       = "Tether Virtual Audio"
+TetherAudio.SvcDesc          = "Tether Virtual Audio Driver"
+TetherAudio.Render.szPname   = "Tether Audio"
+TetherAudio.Capture.szPname  = "Tether Microphone"
+
+Proxy.CLSID                  = "{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
+KSCATEGORY_AUDIO             = "{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
+KSCATEGORY_RENDER            = "{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_CAPTURE           = "{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
+KSNAME_Render                = "Render"
+KSNAME_Capture               = "Capture"

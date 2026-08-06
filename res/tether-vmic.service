@@ -1,0 +1,19 @@
+[Unit]
+Description=Tether virtual microphone (PulseAudio/PipeWire setup)
+# Wait for the user's audio stack to be up. On PipeWire (Ubuntu 22.04+)
+# pipewire-pulse.service satisfies pulseaudio.service; on legacy PulseAudio
+# pulseaudio.service starts it directly.
+After=pulseaudio.service pipewire-pulse.service
+PartOf=pulseaudio.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Load a null sink named "Tether Audio" plus a remap-source called
+# "Tether Microphone" pointing at its monitor. Both apps and cpal enumerate
+# them by name (see src/virtual_mic/linux.rs and src/client.rs).
+ExecStart=/usr/share/tether/files/tether-vmic-setup.sh load
+ExecStop=/usr/share/tether/files/tether-vmic-setup.sh unload
+
+[Install]
+WantedBy=default.target

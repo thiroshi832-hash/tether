@@ -1236,6 +1236,12 @@ pub struct AudioHandler {
     device_channel: u16,
     #[cfg(not(target_os = "linux"))]
     ready: Arc<std::sync::Mutex<bool>>,
+    // Tether: when set, play to the output device whose name contains this
+    // string (used to route the operator's mic into the virtual audio device)
+    // instead of the default output. On Linux this is the PulseAudio sink
+    // name (e.g. "tether_audio"); on Windows/macOS it's a cpal device-name
+    // substring.
+    output_device_name: Option<String>,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -1376,11 +1382,15 @@ impl AudioHandler {
             bail!("Invalid audio format");
         }
 
+        // Tether: prefer a named sink (e.g. "tether_audio") so operator-mic
+        // audio lands on the virtual microphone. `Simple::new` falls through
+        // to the default device when the named sink is absent.
+        let dev = self.output_device_name.as_deref();
         self.simple = Some(Simple::new(
             None,                   // Use the default server
             &crate::get_app_name(), // Our application’s name
             Direction::Playback,    // We want a playback stream
-            None,                   // Use the default device
+            dev,                    // Optional named sink
             "playback",             // Description of our stream
             &spec,                  // Our sample format
             None,                   // Use default channel map
@@ -1390,14 +1400,32 @@ impl AudioHandler {
         Ok(())
     }
 
+    // Tether: find an output device whose name contains `name` (case-insensitive).
+    #[cfg(not(target_os = "linux"))]
+    fn find_output_device_by_name(name: &str) -> Option<cpal::Device> {
+        let want = name.to_lowercase();
+        AUDIO_HOST.output_devices().ok()?.find(|d| {
+            d.name()
+                .map(|n| n.to_lowercase().contains(&want))
+                .unwrap_or(false)
+        })
+    }
+
     /// Start the audio playback.
     #[cfg(not(target_os = "linux"))]
     fn start_audio(&mut self, format0: AudioFormat) -> ResultType<()> {
-        let device = AUDIO_HOST
-            .default_output_device()
-            .with_context(|| "Failed to get default output device")?;
+        // Tether: prefer a named output device (e.g. the virtual audio device)
+        // when requested, falling back to the default output.
+        let device = match &self.output_device_name {
+            Some(name) => Self::find_output_device_by_name(name)
+                .or_else(|| AUDIO_HOST.default_output_device())
+                .with_context(|| "Failed to get output device")?,
+            None => AUDIO_HOST
+                .default_output_device()
+                .with_context(|| "Failed to get default output device")?,
+        };
         log::info!(
-            "Using default output device: \"{}\"",
+            "Using output device: \"{}\"",
             device.name().unwrap_or("".to_owned())
         );
         let config = device.default_output_config().map_err(|e| anyhow!(e))?;
@@ -3049,9 +3077,18 @@ pub fn start_video_thread<F, T>(
 /// Start an audio thread
 /// Return a audio [`MediaSender`]
 pub fn start_audio_thread() -> MediaSender {
+    start_audio_thread_with_device(None)
+}
+
+// Tether: like `start_audio_thread`, but routes playback to the output device
+// whose name contains `output_device_name` (e.g. the virtual audio device that
+// backs the "Tether Microphone" capture endpoint). Falls back to the default
+// output if that device isn't present.
+pub fn start_audio_thread_with_device(output_device_name: Option<String>) -> MediaSender {
     let (audio_sender, audio_receiver) = mpsc::channel::<MediaData>();
     std::thread::spawn(move || {
         let mut audio_handler = AudioHandler::default();
+        audio_handler.output_device_name = output_device_name;
         loop {
             if let Ok(data) = audio_receiver.recv() {
                 match data {

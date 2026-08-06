@@ -20,7 +20,8 @@ use crate::platform::WallPaperRemover;
 use crate::portable_service::client as portable_client;
 use crate::{
     client::{
-        new_voice_call_request, new_voice_call_response, start_audio_thread, MediaData, MediaSender,
+        new_voice_call_request, new_voice_call_response, start_audio_thread,
+        start_audio_thread_with_device, MediaData, MediaSender,
     },
     display_service, ipc, privacy_mode, video_service, VERSION,
 };
@@ -316,6 +317,10 @@ pub struct Connection {
     // Tether: allow the connecting user's own camera/mic to be used here.
     remote_camera: bool,
     remote_mic: bool,
+    // Tether: last negotiated audio format, so we can re-create the playback
+    // thread (e.g. re-route to the virtual mic) if remote_mic toggles mid-call.
+    #[cfg(any(windows, target_os = "linux"))]
+    last_audio_format: Option<hbb_common::message_proto::AudioFormat>,
     control_permissions: Option<ControlPermissions>,
     last_test_delay: Option<Instant>,
     network_delay: u32,
@@ -518,6 +523,8 @@ impl Connection {
             // Tether: off by default; the controlled user opts in from the CM window.
             remote_camera: false,
             remote_mic: false,
+            #[cfg(any(windows, target_os = "linux"))]
+            last_audio_format: None,
             control_permissions,
             last_test_delay: None,
             network_delay: 0,
@@ -816,6 +823,9 @@ impl Connection {
                                 // Tether: tell the peer it may send its microphone.
                                 conn.remote_mic = enabled;
                                 conn.send_permission(Permission::RemoteMic, enabled).await;
+                                // Tether: re-route audio if a call is already active.
+                                #[cfg(any(windows, target_os = "linux"))]
+                                conn.tether_reroute_audio();
                             }
                         }
                         ipc::Data::RawMessage(bytes) => {
@@ -1063,6 +1073,7 @@ impl Connection {
                         // Tether: tray requested to show this connection's CM window; forward to the CM.
                         #[cfg(windows)]
                         ipc::Data::ShowCM(_) => {
+                            log::info!("[tether-showcm] connection {} forwarding ShowCM to its CM", conn.inner.id());
                             conn.send_to_cm(ipc::Data::ShowCM(conn.inner.id()));
                         }
                         _ => {}
@@ -1336,6 +1347,32 @@ impl Connection {
         let mut msg_out = Message::new();
         msg_out.set_misc(misc);
         self.send(msg_out).await;
+    }
+
+    // Tether: re-create the audio playback thread so the operator's mic audio is
+    // routed to the virtual microphone device (when remote_mic is on) or back to
+    // the local speakers (when off). No-op unless audio is currently flowing.
+    #[cfg(any(windows, target_os = "linux"))]
+    fn tether_reroute_audio(&mut self) {
+        if self.disable_audio || self.audio_sender.is_none() {
+            return;
+        }
+        let Some(format) = self.last_audio_format.clone() else {
+            return;
+        };
+        drop(std::mem::replace(&mut self.audio_sender, None));
+        let sender = if self.remote_mic {
+            if let Err(e) = crate::virtual_mic::ensure_installed() {
+                log::warn!("Tether virtual mic unavailable: {}", e);
+            }
+            start_audio_thread_with_device(Some(
+                crate::virtual_mic::RENDER_DEVICE_MATCH.to_string(),
+            ))
+        } else {
+            start_audio_thread()
+        };
+        allow_err!(sender.send(MediaData::AudioFormat(format)));
+        self.audio_sender = Some(sender);
     }
 
     async fn check_privacy_mode_on(&mut self) -> bool {
@@ -3486,9 +3523,31 @@ impl Connection {
                     },
                     Some(misc::Union::AudioFormat(format)) => {
                         if !self.disable_audio {
+                            // Tether: remember the format so remote_mic toggles
+                            // mid-call can re-create the playback thread.
+                            #[cfg(any(windows, target_os = "linux"))]
+                            {
+                                self.last_audio_format = Some(format.clone());
+                            }
                             // Drop the audio sender previously.
                             drop(std::mem::replace(&mut self.audio_sender, None));
-                            self.audio_sender = Some(start_audio_thread());
+                            // Tether: if the operator's mic is allowed, route the
+                            // audio into the virtual microphone device instead of
+                            // the local speakers (installing it on first use).
+                            #[cfg(any(windows, target_os = "linux"))]
+                            let sender = if self.remote_mic {
+                                if let Err(e) = crate::virtual_mic::ensure_installed() {
+                                    log::warn!("Tether virtual mic unavailable: {}", e);
+                                }
+                                start_audio_thread_with_device(Some(
+                                    crate::virtual_mic::RENDER_DEVICE_MATCH.to_string(),
+                                ))
+                            } else {
+                                start_audio_thread()
+                            };
+                            #[cfg(not(any(windows, target_os = "linux")))]
+                            let sender = start_audio_thread();
+                            self.audio_sender = Some(sender);
                             self.audio_sender
                                 .as_ref()
                                 .map(|a| allow_err!(a.send(MediaData::AudioFormat(format))));
@@ -5098,13 +5157,18 @@ impl Connection {
     // connection, which forwards it to its CM to raise the info window.
     #[cfg(windows)]
     pub fn show_cm_for_conn(conn_id: i32) {
+        let ids: Vec<i32> = AUTHED_CONNS.lock().unwrap().iter().map(|c| c.conn_id).collect();
+        log::info!("[tether-showcm] show_cm_for_conn({}) authed_conns={:?}", conn_id, ids);
         if let Some(c) = AUTHED_CONNS
             .lock()
             .unwrap()
             .iter()
             .find(|c| c.conn_id == conn_id)
         {
+            log::info!("[tether-showcm] found conn {}, sending ShowCM to its sender", conn_id);
             allow_err!(c.sender.send(Data::ShowCM(conn_id)));
+        } else {
+            log::error!("[tether-showcm] conn {} NOT in AUTHED_CONNS", conn_id);
         }
     }
 

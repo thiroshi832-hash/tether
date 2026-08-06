@@ -241,6 +241,8 @@ class DesktopTab extends StatefulWidget {
   final bool showMinimize;
   final bool showMaximize;
   final bool showClose;
+  // Tether: override the minimize button action (CM window hides instead).
+  final VoidCallback? onMinimize;
   final Widget Function(Widget pageView)? pageViewBuilder;
   // Right click tab menu
   final TabMenuBuilder? tabMenuBuilder;
@@ -267,6 +269,7 @@ class DesktopTab extends StatefulWidget {
     this.showMinimize = true,
     this.showMaximize = true,
     this.showClose = true,
+    this.onMinimize,
     this.pageViewBuilder,
     this.tabMenuBuilder,
     this.tail,
@@ -691,6 +694,7 @@ class _DesktopTabState extends State<DesktopTab>
           showMinimize: showMinimize,
           showMaximize: showMaximize,
           showClose: showClose,
+          onMinimize: widget.onMinimize,
           onClose: onWindowCloseButton,
           labelGetter: labelGetter,
         ).paddingOnly(left: 10)
@@ -707,6 +711,7 @@ class WindowActionPanel extends StatefulWidget {
   final bool showMinimize;
   final bool showMaximize;
   final bool showClose;
+  final VoidCallback? onMinimize;
   final Widget? tail;
   final Future<bool> Function()? onClose;
 
@@ -723,6 +728,7 @@ class WindowActionPanel extends StatefulWidget {
       this.showMinimize = true,
       this.showMaximize = true,
       this.showClose = true,
+      this.onMinimize,
       this.onClose,
       this.labelGetter})
       : super(key: key);
@@ -774,7 +780,9 @@ class WindowActionPanelState extends State<WindowActionPanel> {
                   message: 'Minimize',
                   icon: IconFont.min,
                   onTap: () {
-                    if (widget.isMainWindow) {
+                    if (widget.onMinimize != null) {
+                      widget.onMinimize!();
+                    } else if (widget.isMainWindow) {
                       windowManager.minimize();
                     } else {
                       WindowController.fromWindowId(kWindowId!).minimize();
