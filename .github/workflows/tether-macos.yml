@@ -1,0 +1,135 @@
+name: Tether macOS build
+
+# Builds the unsigned Tether.app -> tether-<ver>.dmg on GitHub's macOS runners,
+# so a Mac with a too-old OS (or no Mac) isn't needed. Runs on push to the
+# feature branch and via the manual "Run workflow" button.
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/linux-macos-builds]
+    paths:
+      - '.github/workflows/tether-macos.yml'
+      - 'src/**'
+      - 'flutter/**'
+      - 'build.py'
+      - 'Cargo.*'
+      - 'hbb_common_fork.patch'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14      # Apple Silicon
+            arch: arm64
+            triplet: arm64-osx
+          - os: macos-13      # Intel
+            arch: x86_64
+            triplet: x64-osx
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    env:
+      FLUTTER_VERSION: 3.24.5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false   # we init hbb_common manually to apply the crypto patch
+
+      # --- hbb_common fork (base a920d00 + our X25519 crypto patch) ---
+      - name: Populate hbb_common and apply crypto fork patch
+        run: |
+          git submodule update --init libs/hbb_common
+          git -C libs/hbb_common apply "$GITHUB_WORKSPACE/hbb_common_fork.patch"
+          test -f libs/hbb_common/src/crypto.rs && echo "crypto fork applied"
+
+      # --- Rust toolchain + bridge codegen tool ---
+      - name: Set up Rust
+        run: |
+          rustup default stable
+          rustup target add ${{ matrix.arch }}-apple-darwin
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Cache cargo registry + frb tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+          key: cargo-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ matrix.os }}-
+
+      - name: Install flutter_rust_bridge_codegen
+        run: |
+          which flutter_rust_bridge_codegen || cargo install --locked flutter_rust_bridge_codegen@1.80.1
+          which cargo-expand || cargo install --locked cargo-expand@1.0.95
+
+      # --- Homebrew build tools ---
+      - name: Install build tools
+        run: brew install nasm yasm ninja create-dmg pkg-config cmake
+
+      # --- Flutter 3.24.5 (git clone so the dropdown patch applies) ---
+      - name: Set up Flutter
+        run: |
+          git clone -b "$FLUTTER_VERSION" --depth 1 https://github.com/flutter/flutter.git "$HOME/flutter-sdk"
+          echo "$HOME/flutter-sdk/bin" >> "$GITHUB_PATH"
+          "$HOME/flutter-sdk/bin/flutter" precache --macos
+          git -C "$HOME/flutter-sdk" apply "$GITHUB_WORKSPACE/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff" \
+            || echo "::warning::dropdown_menu patch did not apply cleanly (may be unneeded on this SDK)"
+
+      # --- vcpkg codec dependencies (cached) ---
+      - name: Cache vcpkg installed
+        uses: actions/cache@v4
+        with:
+          path: ~/vcpkg/installed
+          key: vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Set up vcpkg + install deps
+        run: |
+          if [ ! -x "$HOME/vcpkg/vcpkg" ]; then
+            git clone https://github.com/microsoft/vcpkg "$HOME/vcpkg"
+            git -C "$HOME/vcpkg" checkout "$(grep -o '[0-9a-f]\{40\}' "$GITHUB_WORKSPACE/vcpkg.json" | head -1)"
+            "$HOME/vcpkg/bootstrap-vcpkg.sh"
+          fi
+          echo "VCPKG_ROOT=$HOME/vcpkg" >> "$GITHUB_ENV"
+          cd "$GITHUB_WORKSPACE"
+          "$HOME/vcpkg/vcpkg" install --triplet ${{ matrix.triplet }} --x-install-root="$HOME/vcpkg/installed"
+
+      # --- Rust<->Dart bridge, then packages ---
+      - name: Bridge codegen
+        run: |
+          flutter_rust_bridge_codegen \
+            --rust-input src/flutter_ffi.rs \
+            --dart-output flutter/lib/generated_bridge.dart \
+            --c-output flutter/macos/Runner/bridge_generated.h
+
+      - name: flutter pub get
+        run: |
+          cd flutter
+          flutter pub get
+
+      # --- Build the app + dmg (build.py forces ad-hoc unsigned) ---
+      - name: Build Tether macOS
+        run: |
+          export VCPKG_ROOT="$HOME/vcpkg"
+          python3 build.py --flutter
+
+      - name: Upload dmg
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tether-macos-${{ matrix.arch }}
+          path: tether-*.dmg
+          if-no-files-found: warn
+
+      # Fallback: if create-dmg/packaging was skipped, still surface the .app
+      - name: Upload app bundle (fallback)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tether-macos-${{ matrix.arch }}-app
+          path: flutter/build/macos/Build/Products/Release/Tether.app
+          if-no-files-found: ignore
