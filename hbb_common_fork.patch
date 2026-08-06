@@ -1,0 +1,262 @@
+diff --git a/protos/message.proto b/protos/message.proto
+index 8b21368..345897f 100644
+--- a/protos/message.proto
++++ b/protos/message.proto
+@@ -38,6 +38,10 @@ message VideoFrame {
+ message IdPk {
+   string id = 1;
+   bytes pk = 2;
++  // Tether: crypto-suite negotiation. The responder advertises the suites it
++  // supports and an ephemeral X25519 public key for suite 1.
++  repeated uint32 crypto_suites = 3;
++  bytes suite1_pk = 4;
+ }
+ 
+ message DisplayInfo {
+@@ -636,12 +640,24 @@ message PermissionInfo {
+     Recording = 6;
+     BlockInput = 7;
+     PrivacyMode = 8;
++    // Tether: allow the connecting user's own camera / microphone to be
++    // exposed as virtual devices on the controlled machine.
++    RemoteCamera = 9;
++    RemoteMic = 10;
+   }
+ 
+   Permission permission = 1;
+   bool enabled = 2;
+ }
+ 
++// Tether: a single webcam frame (JPEG) forwarded from the connecting user to
++// the controlled machine, where it feeds the Tether virtual camera device.
++message TetherCameraFrame {
++  bytes jpeg = 1;
++  int32 width = 2;
++  int32 height = 3;
++}
++
+ enum ImageQuality {
+   NotSet = 0;
+   Low = 2;
+@@ -708,6 +724,8 @@ message TestDelay {
+ message PublicKey {
+   bytes asymmetric_value = 1;
+   bytes symmetric_value = 2;
++  // Tether: the crypto suite the initiator chose (0 = legacy box).
++  uint32 crypto_suite = 3;
+ }
+ 
+ message SignedId { bytes id = 1; }
+@@ -981,5 +999,6 @@ message Message {
+     ScreenshotResponse screenshot_response= 30;
+     TerminalAction terminal_action = 31;
+     TerminalResponse terminal_response = 32;
++    TetherCameraFrame tether_camera_frame = 33;
+   }
+ }
+diff --git a/protos/rendezvous.proto b/protos/rendezvous.proto
+index a2b1d65..11cf7b6 100644
+--- a/protos/rendezvous.proto
++++ b/protos/rendezvous.proto
+@@ -212,7 +212,10 @@ message OnlineResponse {
+ }
+ 
+ message KeyExchange {
+-  repeated bytes keys = 1; 
++  repeated bytes keys = 1;
++  // Tether: crypto-suite negotiation for the rendezvous-relayed key exchange.
++  repeated uint32 crypto_suites = 2;
++  uint32 chosen_suite = 3;
+ }
+ 
+ message HealthCheck {
+diff --git a/src/config.rs b/src/config.rs
+index 8b8023b..09b7e25 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -69,7 +69,7 @@ lazy_static::lazy_static! {
+     static ref ONLINE: Mutex<HashMap<String, i64>> = Default::default();
+     pub static ref PROD_RENDEZVOUS_SERVER: RwLock<String> = RwLock::new("".to_owned());
+     pub static ref EXE_RENDEZVOUS_SERVER: RwLock<String> = Default::default();
+-    pub static ref APP_NAME: RwLock<String> = RwLock::new("RustDesk".to_owned());
++    pub static ref APP_NAME: RwLock<String> = RwLock::new("Tether".to_owned());
+     static ref KEY_PAIR: Mutex<Option<KeyPair>> = Default::default();
+     static ref USER_DEFAULT_CONFIG: RwLock<(UserDefaultConfig, Instant)> = RwLock::new((UserDefaultConfig::load(), Instant::now()));
+     pub static ref NEW_STORED_PEER_CONFIG: Mutex<HashSet<String>> = Default::default();
+diff --git a/src/crypto.rs b/src/crypto.rs
+new file mode 100644
+index 0000000..dff7718
+--- /dev/null
++++ b/src/crypto.rs
+@@ -0,0 +1,124 @@
++//! Crypto-suite negotiation + X25519 ECDH key agreement.
++//!
++//! IMPORTANT: this module was RECONSTRUCTED to match the call sites in the
++//! Tether app after the original forked implementation was lost (drive format).
++//! It provides a real, self-consistent handshake — X25519 ECDH with a
++//! transcript-bound KDF, feeding the derived key into hbb_common's existing
++//! authenticated `secretbox` transport — so two Tether peers built from this
++//! code interoperate securely. It is NOT guaranteed byte-identical to the lost
++//! original; review before shipping.
++//!
++//! Handshake shape (suite 1):
++//!  - Responder advertises `advertised_suite_ids()` + an ephemeral X25519
++//!    public key (`suite1_pk`) inside its Ed25519-signed `IdPk`.
++//!  - Initiator picks a suite via `negotiate()`, generates its own ephemeral
++//!    key, computes the shared secret, and returns its public key + the chosen
++//!    suite. Both sides derive the same key via `EcdhHalf::finish`, which binds
++//!    (responder_pub, initiator_pub, suite, domain) into the KDF so the exchange
++//!    cannot be silently downgraded or tampered with.
++
++use crate::ResultType;
++use sodiumoxide::crypto::{
++    generichash,
++    scalarmult::curve25519::{scalarmult, scalarmult_base, GroupElement, Scalar},
++    secretbox,
++};
++
++/// Legacy NaCl box handshake (stock RustDesk). No ECDH suite negotiated.
++pub const SUITE_LEGACY: u32 = 0;
++/// X25519 ECDH; derived key drives the authenticated secretbox transport.
++pub const SUITE_X25519_XCHACHA20POLY1305: u32 = 1;
++
++#[derive(Clone, Copy, PartialEq, Eq, Debug)]
++pub enum CryptoSuite {
++    Legacy,
++    X25519XChaCha20Poly1305,
++}
++
++impl CryptoSuite {
++    pub fn to_u32(&self) -> u32 {
++        match self {
++            CryptoSuite::Legacy => SUITE_LEGACY,
++            CryptoSuite::X25519XChaCha20Poly1305 => SUITE_X25519_XCHACHA20POLY1305,
++        }
++    }
++
++    pub fn from_u32(v: u32) -> Option<CryptoSuite> {
++        match v {
++            SUITE_LEGACY => Some(CryptoSuite::Legacy),
++            SUITE_X25519_XCHACHA20POLY1305 => Some(CryptoSuite::X25519XChaCha20Poly1305),
++            _ => None,
++        }
++    }
++}
++
++/// Suites this build advertises, strongest first.
++pub fn advertised_suite_ids() -> Vec<u32> {
++    vec![SUITE_X25519_XCHACHA20POLY1305]
++}
++
++/// Pick the strongest suite supported by both us and the peer's advertised set.
++/// Falls back to `Legacy` when the peer advertises nothing we recognize (e.g. a
++/// stock RustDesk peer), which keeps interop with unmodified clients/servers.
++pub fn negotiate(advertised: &[u32]) -> CryptoSuite {
++    if advertised.contains(&SUITE_X25519_XCHACHA20POLY1305) {
++        CryptoSuite::X25519XChaCha20Poly1305
++    } else {
++        CryptoSuite::Legacy
++    }
++}
++
++/// One party's ephemeral X25519 keypair.
++pub struct EcdhHalf {
++    secret: Scalar,
++    /// Our ephemeral public key (send this to the peer).
++    pub public: [u8; 32],
++}
++
++impl EcdhHalf {
++    pub fn new() -> Self {
++        let mut sk = [0u8; 32];
++        sk.copy_from_slice(&sodiumoxide::randombytes::randombytes(32));
++        let secret = Scalar(sk);
++        // libsodium clamps the scalar internally.
++        let public = scalarmult_base(&secret).0;
++        Self { secret, public }
++    }
++
++    /// Complete the exchange with the peer's public key and derive the symmetric
++    /// key. `transcript_a`/`transcript_b` MUST be supplied in the same order by
++    /// both peers (Tether uses responder_pub then initiator_pub), and `domain`
++    /// must match, so both sides derive an identical key while binding the
++    /// transcript against tampering/downgrade.
++    pub fn finish(
++        &self,
++        their_public: &[u8; 32],
++        suite: CryptoSuite,
++        transcript_a: &[u8; 32],
++        transcript_b: &[u8; 32],
++        domain: &[u8],
++    ) -> ResultType<secretbox::Key> {
++        let shared = scalarmult(&self.secret, &GroupElement(*their_public))
++            .map_err(|_| crate::anyhow::anyhow!("X25519 scalarmult failed (low-order point?)"))?;
++        let mut st = generichash::State::new(Some(secretbox::KEYBYTES), None)
++            .map_err(|_| crate::anyhow::anyhow!("KDF init failed"))?;
++        // Domain separation + shared secret + bound transcript.
++        let _ = st.update(b"tether-ecdh-v1");
++        let _ = st.update(&shared.0);
++        let _ = st.update(transcript_a);
++        let _ = st.update(transcript_b);
++        let _ = st.update(&suite.to_u32().to_le_bytes());
++        let _ = st.update(domain);
++        let digest = st
++            .finalize()
++            .map_err(|_| crate::anyhow::anyhow!("KDF finalize failed"))?;
++        secretbox::Key::from_slice(digest.as_ref())
++            .ok_or_else(|| crate::anyhow::anyhow!("derived key has wrong length"))
++    }
++}
++
++impl Default for EcdhHalf {
++    fn default() -> Self {
++        Self::new()
++    }
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index 2b35642..a5fa2ef 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,4 +1,5 @@
+ pub mod compress;
++pub mod crypto;
+ pub mod platform;
+ pub mod protos;
+ pub use bytes;
+diff --git a/src/stream.rs b/src/stream.rs
+index a8e6b6c..f23e8eb 100644
+--- a/src/stream.rs
++++ b/src/stream.rs
+@@ -64,6 +64,14 @@ impl Stream {
+         }
+     }
+ 
++    // Tether: install a key derived from a negotiated crypto suite (e.g. the
++    // X25519 ECDH suite). Installs exactly like a legacy key onto the same
++    // authenticated transport; only the key agreement that produced it differs.
++    #[inline]
++    pub fn set_key_suite1(&mut self, key: Key) {
++        self.set_key(key)
++    }
++
+     #[inline]
+     pub fn is_secured(&self) -> bool {
+         match self {
+diff --git a/src/tcp.rs b/src/tcp.rs
+index 2296edb..c594d17 100644
+--- a/src/tcp.rs
++++ b/src/tcp.rs
+@@ -200,6 +200,13 @@ impl FramedStream {
+         self.2 = Some(Encrypt::new(key));
+     }
+ 
++    // Tether: install a key derived from a negotiated crypto suite (e.g. the
++    // X25519 ECDH suite). The authenticated secretbox transport is unchanged;
++    // only the key-agreement that produced `key` differs.
++    pub fn set_key_suite1(&mut self, key: Key) {
++        self.2 = Some(Encrypt::new(key));
++    }
++
+     fn get_nonce(seqnum: u64) -> Nonce {
+         let mut nonce = Nonce([0u8; secretbox::NONCEBYTES]);
+         nonce.0[..std::mem::size_of_val(&seqnum)].copy_from_slice(&seqnum.to_le_bytes());
