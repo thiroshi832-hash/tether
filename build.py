@@ -425,6 +425,34 @@ def build_deb_from_folder(version, binary_folder):
     os.chdir("..")
 
 
+def regenerate_macos_icon():
+    # Tether: build flutter/macos/Runner/AppIcon.icns from res/tether_source.png
+    # using Apple's sips + iconutil (macOS only) so macOS matches the Windows/
+    # Linux "T" branding. No-op (with a warning) if the source or tools are
+    # missing, so it never blocks the build.
+    src = 'res/tether_source.png'
+    if not os.path.exists(src):
+        print(f'WARN: {src} not found; keeping existing macOS icon')
+        return
+    if shutil.which('iconutil') is None or shutil.which('sips') is None:
+        print('WARN: sips/iconutil not found; keeping existing macOS icon')
+        return
+    iconset = 'build/Tether.iconset'
+    shutil.rmtree(iconset, ignore_errors=True)
+    os.makedirs(iconset, exist_ok=True)
+    # (pixel size, iconset filename suffix) for the standard macOS icon set.
+    sizes = [
+        (16, '16x16'), (32, '16x16@2x'), (32, '32x32'), (64, '32x32@2x'),
+        (128, '128x128'), (256, '128x128@2x'), (256, '256x256'),
+        (512, '256x256@2x'), (512, '512x512'), (1024, '512x512@2x'),
+    ]
+    for px, name in sizes:
+        system2(f'sips -z {px} {px} "{src}" --out "{iconset}/icon_{name}.png"')
+    system2(
+        f'iconutil -c icns "{iconset}" -o flutter/macos/Runner/AppIcon.icns')
+    print('Tether macOS icon regenerated from ' + src)
+
+
 def build_flutter_dmg(version, features):
     # Tether: the macOS app is Tether.app (PRODUCT_NAME=Tether in
     # flutter/macos/Runner/Configs/AppInfo.xcconfig) with bundle id
@@ -436,6 +464,9 @@ def build_flutter_dmg(version, features):
     # copy dylib
     system2(
         "cp target/release/liblibrustdesk.dylib target/release/librustdesk.dylib")
+    # Tether: regenerate the macOS app icon from the shared Tether artwork so it
+    # matches the Windows/Linux branding (the committed AppIcon.icns is stock).
+    regenerate_macos_icon()
     os.chdir('flutter')
     # cargo builds a single-arch dylib for the host; restrict Xcode to the same arch
     # so the universal-by-default ARCHS_STANDARD doesn't try to link a missing slice.
