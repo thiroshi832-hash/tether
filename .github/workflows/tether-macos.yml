@@ -49,7 +49,7 @@ jobs:
       - name: Set up Rust
         run: |
           rustup default stable
-          rustup target add ${{ matrix.arch }}-apple-darwin
+          # build.py builds for the host arch; its target is already installed.
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Cache cargo registry + frb tools
