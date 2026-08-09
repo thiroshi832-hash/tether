@@ -1559,7 +1559,7 @@ pub mod connection_manager {
 
         fn show_cm(&self) {
             // Tether: ask the CM window (dart) to raise/show itself.
-            log::info!("[tether-showcm] FlutterHandler::show_cm pushing 'show_cm' event to cm stream");
+            hbb_common::log::info!("[tether-showcm] FlutterHandler::show_cm pushing 'show_cm' event to cm stream");
             self.push_event::<&str>("show_cm", &[]);
         }
 
@@ -1594,11 +1594,11 @@ pub mod connection_manager {
 
             if let Some(s) = GLOBAL_EVENT_STREAM.read().unwrap().get(super::APP_TYPE_CM) {
                 if name == "show_cm" {
-                    log::info!("[tether-showcm] push_event: 'cm' stream found, adding event");
+                    hbb_common::log::info!("[tether-showcm] push_event: 'cm' stream found, adding event");
                 }
                 s.add(serde_json::ser::to_string(&h).unwrap_or("".to_owned()));
             } else {
-                log::error!(
+                hbb_common::log::error!(
                     "[tether-showcm] Push event {} failed. No {} event stream found.",
                     name,
                     super::APP_TYPE_CM
