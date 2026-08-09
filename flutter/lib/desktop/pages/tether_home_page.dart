@@ -85,6 +85,17 @@ class _TetherHomePageState extends State<TetherHomePage> {
     // not whatever tab was persisted from a previous session (e.g. address book).
     WidgetsBinding.instance.addPostFrameCallback((_) {
       gFFI.peerTabModel.setCurrentTab(PeerTabIndex.recent.index);
+      // Tether: the drag-install .dmg can't register the background service
+      // (macOS requires admin auth for a LaunchDaemon). Match stock RustDesk and
+      // prompt to install it on launch when the app is in /Applications but the
+      // daemon isn't installed yet. The osascript admin prompt runs in this
+      // long-lived app process (a bare `--install-service` CLI call would exit
+      // before its background install thread finished).
+      if (isMacOS &&
+          bind.mainIsInstalled() &&
+          !bind.mainIsInstalledDaemon(prompt: false)) {
+        bind.mainIsInstalledDaemon(prompt: true);
+      }
     });
   }
 
