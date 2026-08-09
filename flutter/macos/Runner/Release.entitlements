@@ -6,6 +6,11 @@
 	<false/>
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
+	<!-- Tether: this build is ad-hoc signed (no Apple Developer Team ID). The
+	     hardened runtime's Library Validation would otherwise refuse to load the
+	     ad-hoc-signed FlutterMacOS.framework / liblibrustdesk.dylib. Allow it. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
 	<key>com.apple.security.network.client</key>
