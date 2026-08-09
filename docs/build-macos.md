@@ -70,19 +70,20 @@ $VCPKG_ROOT/vcpkg install --triplet arm64-osx --x-install-root="$VCPKG_ROOT/inst
 
 (Use `--triplet x64-osx` on Intel.)
 
-## 4. Bridge codegen
+## 4. Resolve packages, then bridge codegen
+
+`flutter pub get` must run **before** codegen — the bridge codegen invokes
+`ffigen`, which needs `flutter/.dart_tool/package_config.json` to exist (else it
+fails with `Cannot open file … package_config.json`). It also prevents the mass
+`invalid-type … NativeType` FFI errors at build time.
 
 ```sh
-cd /path/to/tether
+cd /path/to/tether/flutter && flutter pub get && cd ..
 flutter_rust_bridge_codegen \
     --rust-input src/flutter_ffi.rs \
     --dart-output flutter/lib/generated_bridge.dart \
     --c-output flutter/macos/Runner/bridge_generated.h
-cd flutter && flutter pub get && cd ..
 ```
-
-`flutter pub get` matters — a stale `flutter/.dart_tool` causes mass
-`invalid-type … NativeType` FFI errors at build time. Always run it before a build.
 
 ## 5. Build
 

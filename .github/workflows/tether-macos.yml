@@ -98,18 +98,19 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           "$HOME/vcpkg/vcpkg" install --triplet ${{ matrix.triplet }} --x-install-root="$HOME/vcpkg/installed"
 
-      # --- Rust<->Dart bridge, then packages ---
+      # --- Resolve Dart packages BEFORE codegen: ffigen (invoked by the bridge
+      # codegen) needs flutter/.dart_tool/package_config.json to exist. ---
+      - name: flutter pub get
+        run: |
+          cd flutter
+          flutter pub get
+
       - name: Bridge codegen
         run: |
           flutter_rust_bridge_codegen \
             --rust-input src/flutter_ffi.rs \
             --dart-output flutter/lib/generated_bridge.dart \
             --c-output flutter/macos/Runner/bridge_generated.h
-
-      - name: flutter pub get
-        run: |
-          cd flutter
-          flutter pub get
 
       # --- Build the app + dmg (build.py forces ad-hoc unsigned) ---
       - name: Build Tether macOS
