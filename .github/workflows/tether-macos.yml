@@ -90,8 +90,15 @@ jobs:
       - name: Set up vcpkg + install deps
         run: |
           if [ ! -x "$HOME/vcpkg/vcpkg" ]; then
-            git clone https://github.com/microsoft/vcpkg "$HOME/vcpkg"
-            git -C "$HOME/vcpkg" checkout "$(grep -o '[0-9a-f]\{40\}' "$GITHUB_WORKSPACE/vcpkg.json" | head -1)"
+            # ~/vcpkg may already exist because the "Cache vcpkg installed" step
+            # restored ~/vcpkg/installed. Clone into a temp dir and copy the repo
+            # in so we don't clobber the restored installed/ (a direct clone into
+            # a non-empty ~/vcpkg is a fatal git error).
+            rm -rf /tmp/vcpkg-src
+            git clone https://github.com/microsoft/vcpkg /tmp/vcpkg-src
+            git -C /tmp/vcpkg-src checkout "$(grep -o '[0-9a-f]\{40\}' "$GITHUB_WORKSPACE/vcpkg.json" | head -1)"
+            mkdir -p "$HOME/vcpkg"
+            cp -R /tmp/vcpkg-src/. "$HOME/vcpkg/"
             "$HOME/vcpkg/bootstrap-vcpkg.sh"
           fi
           echo "VCPKG_ROOT=$HOME/vcpkg" >> "$GITHUB_ENV"
