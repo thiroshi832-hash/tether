@@ -581,7 +581,7 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                     self.cm.new_message(self.conn_id, text);
                                 }
                                 // Tether: tray requested to raise this connection's info window.
-                                #[cfg(windows)]
+                                #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
                                 Data::ShowCM(_) => {
                                     log::info!("[tether-showcm] cm process received ShowCM, calling ui_handler.show_cm()");
                                     self.cm.ui_handler.show_cm();

@@ -1071,7 +1071,7 @@ impl Connection {
                             }
                         }
                         // Tether: tray requested to show this connection's CM window; forward to the CM.
-                        #[cfg(windows)]
+                        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
                         ipc::Data::ShowCM(_) => {
                             log::info!("[tether-showcm] connection {} forwarding ShowCM to its CM", conn.inner.id());
                             conn.send_to_cm(ipc::Data::ShowCM(conn.inner.id()));
@@ -5142,7 +5142,7 @@ impl Connection {
 
     // Tether: (conn_id, name, peer_id) for authorized, non-port-forward connections.
     // Used to build the per-connection entries in the tray menu.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     pub fn authed_conns_info() -> Vec<(i32, String, String)> {
         AUTHED_CONNS
             .lock()
@@ -5155,7 +5155,7 @@ impl Connection {
 
     // Tether: route a tray "show connection window" request to the matching
     // connection, which forwards it to its CM to raise the info window.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     pub fn show_cm_for_conn(conn_id: i32) {
         let ids: Vec<i32> = AUTHED_CONNS.lock().unwrap().iter().map(|c| c.conn_id).collect();
         log::info!("[tether-showcm] show_cm_for_conn({}) authed_conns={:?}", conn_id, ids);

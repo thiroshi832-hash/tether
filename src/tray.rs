@@ -1,11 +1,11 @@
 use crate::client::translate;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use crate::ipc::Data;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use hbb_common::tokio;
 use hbb_common::{allow_err, log};
 use std::sync::{Arc, Mutex};
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use std::time::Duration;
 
 pub fn start_tray() {
@@ -98,16 +98,16 @@ fn make_tray() -> hbb_common::ResultType<()> {
 
     let menu_channel = MenuEvent::receiver();
     let tray_channel = TrayEvent::receiver();
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     let (ipc_sender, ipc_receiver) = std::sync::mpsc::channel::<Data>();
     // Tether: event-loop -> ipc-thread channel carrying "show this connection's CM
     // window" clicks, plus the dynamic per-connection menu items (MenuItem, conn_id)
     // and the last-seen list (to avoid rebuilding the menu every poll).
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     let (showcm_sender, showcm_receiver) = std::sync::mpsc::channel::<i32>();
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     let mut conn_items: Vec<(MenuItem, i32)> = Vec::new();
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     let mut last_conn: Vec<(i32, String, String)> = Vec::new();
 
     let open_func = move || {
@@ -136,7 +136,7 @@ fn make_tray() -> hbb_common::ResultType<()> {
         }
     };
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     std::thread::spawn(move || {
         start_query_session_count(ipc_sender.clone(), showcm_receiver);
     });
@@ -213,7 +213,7 @@ fn make_tray() -> hbb_common::ResultType<()> {
             }
             // Tether: clicking a per-connection entry asks the service to show that
             // connection's info (CM) window.
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             if let Some((_, conn_id)) = conn_items.iter().find(|(mi, _)| event.id == *mi.id()) {
                 log::info!("[tether-showcm] tray session entry clicked, conn_id={}", conn_id);
                 let _ = showcm_sender.send(*conn_id);
@@ -242,7 +242,7 @@ fn make_tray() -> hbb_common::ResultType<()> {
             }
         }
 
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         if let Ok(data) = ipc_receiver.try_recv() {
             match data {
                 Data::ControlledSessionCount(count) => {
@@ -272,7 +272,7 @@ fn make_tray() -> hbb_common::ResultType<()> {
     });
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 #[tokio::main(flavor = "current_thread")]
 async fn start_query_session_count(
     sender: std::sync::mpsc::Sender<Data>,

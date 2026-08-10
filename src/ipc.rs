@@ -390,15 +390,16 @@ pub enum Data {
     #[cfg(windows)]
     SyncWinCpuUsage(Option<f64>),
     FileTransferLog((String, String)),
-    #[cfg(windows)]
+    // Tether: desktop (win/mac/linux) tray session-list + show-CM feature.
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     ControlledSessionCount(usize),
     // Tether: full list of active controlled sessions for the tray menu.
     // Each entry is (conn_id, peer_name, peer_id). Sent service -> tray.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     ControlledSessions(Vec<(i32, String, String)>),
     // Tether: tray -> service request to show the connection-manager window
     // for the given conn_id (used by the per-connection tray menu entries).
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     ShowCM(i32),
     CmErr(String),
     // CM-side file reading responses (Windows only)
@@ -1006,7 +1007,7 @@ async fn handle(data: Data, stream: &mut Connection) {
         #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         Data::Plugin(plugin) => crate::plugin::ipc::handle_plugin(plugin, stream).await,
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         Data::ControlledSessionCount(_) => {
             allow_err!(
                 stream
@@ -1024,7 +1025,7 @@ async fn handle(data: Data, stream: &mut Connection) {
                     .await
             );
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         Data::ShowCM(conn_id) => {
             log::info!("[tether-showcm] service ipc received ShowCM({})", conn_id);
             crate::Connection::show_cm_for_conn(conn_id);
