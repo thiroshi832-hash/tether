@@ -41,6 +41,14 @@ fn make_tray() -> hbb_common::ResultType<()> {
     }
 
     let (icon_rgba, icon_width, icon_height) = {
+        // macOS renders the tray icon as a template (alpha-only), so a full-color
+        // Flutter asset would show as a solid blob. Use the dedicated monochrome
+        // Tether template PNG instead. Other platforms prefer the bundled asset.
+        #[cfg(target_os = "macos")]
+        let image = image::load_from_memory(icon)
+            .context("Failed to open icon path")?
+            .into_rgba8();
+        #[cfg(not(target_os = "macos"))]
         let image = load_icon_from_asset()
             .unwrap_or(image::load_from_memory(icon).context("Failed to open icon path")?)
             .into_rgba8();
