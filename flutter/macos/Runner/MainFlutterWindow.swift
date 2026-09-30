@@ -77,7 +77,12 @@ class MainFlutterWindow: NSWindow {
 
     /// Override window theme.
     public func setWindowInterfaceMode(window: NSWindow, themeName: String) {
-        window.appearance = NSAppearance(named: themeName == "light" ? .aqua : .darkAqua)
+        // .darkAqua is 10.14+; the guard lets the 10.13 build weak-link it.
+        if #available(macOS 10.14, *) {
+            window.appearance = NSAppearance(named: themeName == "light" ? .aqua : .darkAqua)
+        } else {
+            window.appearance = NSAppearance(named: .aqua)
+        }
     }
 
     private func enableNativeRelativeMouseMode(channel: FlutterMethodChannel) -> Bool {

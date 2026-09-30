@@ -51,16 +51,19 @@ jobs:
       # Lower the deployment target everywhere it is pinned (same spots upstream
       # rewrites for its arm64 build). The env var also reaches vcpkg's CMake
       # builds and rustc. BSD sed on macOS needs `-i ''`.
+      # Flutter 3.24's MacOSDeploymentTargetMigration rewrites the exact string
+      # "MACOSX_DEPLOYMENT_TARGET = 10.13;" to 10.14 on every build, so the Xcode
+      # project gets "10.13.0" instead. Pods/plugins stay at 10.14: their imports
+      # were checked against the 10.13 SDK and none are missing.
       - name: Lower minimum macOS
         if: matrix.min_macos != ''
         run: |
           V='${{ matrix.min_macos }}'
           sed -i '' -E "s/MACOSX_DEPLOYMENT_TARGET=[0-9]+\.[0-9]+/MACOSX_DEPLOYMENT_TARGET=$V/" build.py
-          sed -i '' -E "s/platform :osx, '.*'/platform :osx, '$V'/" flutter/macos/Podfile
           sed -i '' -E "s/osx_minimum_system_version = \"[0-9]+\.[0-9]+\"/osx_minimum_system_version = \"$V\"/" Cargo.toml
-          sed -i '' -E "s/MACOSX_DEPLOYMENT_TARGET = [0-9]+\.[0-9]+;/MACOSX_DEPLOYMENT_TARGET = $V;/" flutter/macos/Runner.xcodeproj/project.pbxproj
+          sed -i '' -E "s/MACOSX_DEPLOYMENT_TARGET = [0-9]+\.[0-9]+;/MACOSX_DEPLOYMENT_TARGET = $V.0;/" flutter/macos/Runner.xcodeproj/project.pbxproj
           echo "MACOSX_DEPLOYMENT_TARGET=$V" >> "$GITHUB_ENV"
-          grep -n "MACOSX_DEPLOYMENT_TARGET\|platform :osx\|osx_minimum" build.py flutter/macos/Podfile Cargo.toml flutter/macos/Runner.xcodeproj/project.pbxproj
+          grep -n "MACOSX_DEPLOYMENT_TARGET\|osx_minimum" build.py Cargo.toml flutter/macos/Runner.xcodeproj/project.pbxproj
 
       # --- hbb_common fork (base a920d00 + our X25519 crypto patch) ---
       - name: Populate hbb_common and apply crypto fork patch
@@ -148,6 +151,23 @@ jobs:
         run: |
           export VCPKG_ROOT="$HOME/vcpkg"
           python3 build.py --flutter
+
+      # Fail loudly if the lowered build still ends up gated or linked above
+      # the target (the first 10.13 attempt silently shipped 10.14).
+      - name: Verify minimum macOS
+        if: matrix.min_macos != ''
+        run: |
+          APP=flutter/build/macos/Build/Products/Release/Tether.app
+          PL=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist")
+          echo "LSMinimumSystemVersion=$PL"
+          bad=0
+          [ "$PL" = "${{ matrix.min_macos }}.0" ] || [ "$PL" = "${{ matrix.min_macos }}" ] || bad=1
+          for f in "$APP/Contents/MacOS/"* "$APP/Contents/Frameworks/liblibrustdesk.dylib"; do
+            m=$(otool -l "$f" | awk '/LC_BUILD_VERSION/{b=1} b&&/minos/{print $2; exit} /LC_VERSION_MIN_MACOSX/{v=1} v&&/version/{print $2; exit}')
+            echo "$m  ${f#$APP/}"
+            case "$m" in 10.14*|10.15*|1[1-9]*) bad=1 ;; esac
+          done
+          exit $bad
 
       - name: Upload dmg
         if: success()
