@@ -53,8 +53,9 @@ jobs:
       # builds and rustc. BSD sed on macOS needs `-i ''`.
       # Flutter 3.24's MacOSDeploymentTargetMigration rewrites the exact string
       # "MACOSX_DEPLOYMENT_TARGET = 10.13;" to 10.14 on every build, so the Xcode
-      # project gets "10.13.0" instead. Pods/plugins stay at 10.14: their imports
-      # were checked against the 10.13 SDK and none are missing.
+      # project gets "10.13.0" instead. TETHER_MIN_MACOS makes the Podfile force
+      # the plugin pods down as well (Swift won't import 10.14 modules into a
+      # 10.13 Runner).
       - name: Lower minimum macOS
         if: matrix.min_macos != ''
         run: |
@@ -63,6 +64,7 @@ jobs:
           sed -i '' -E "s/osx_minimum_system_version = \"[0-9]+\.[0-9]+\"/osx_minimum_system_version = \"$V\"/" Cargo.toml
           sed -i '' -E "s/MACOSX_DEPLOYMENT_TARGET = [0-9]+\.[0-9]+;/MACOSX_DEPLOYMENT_TARGET = $V.0;/" flutter/macos/Runner.xcodeproj/project.pbxproj
           echo "MACOSX_DEPLOYMENT_TARGET=$V" >> "$GITHUB_ENV"
+          echo "TETHER_MIN_MACOS=$V" >> "$GITHUB_ENV"
           grep -n "MACOSX_DEPLOYMENT_TARGET\|osx_minimum" build.py Cargo.toml flutter/macos/Runner.xcodeproj/project.pbxproj
 
       # --- hbb_common fork (base a920d00 + our X25519 crypto patch) ---

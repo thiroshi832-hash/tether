@@ -36,5 +36,13 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_macos_build_settings(target)
+    # Tether: the experimental 10.13 CI build (TETHER_MIN_MACOS) forces every
+    # pod down too. Plugin podspecs pin 10.14, and Swift refuses to import a
+    # module built for a newer target than the Runner.
+    if ENV['TETHER_MIN_MACOS']
+      target.build_configurations.each do |config|
+        config.build_settings['MACOSX_DEPLOYMENT_TARGET'] = ENV['TETHER_MIN_MACOS']
+      end
+    end
   end
 end
