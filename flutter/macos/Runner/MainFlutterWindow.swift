@@ -202,6 +202,12 @@ class MainFlutterWindow: NSWindow {
                     NSApplication.shared.terminate(self)
                     result(nil)
                 case "canRecordAudio":
+                    // Mic permission (TCC) only exists from 10.14; before that
+                    // access is always allowed.
+                    guard #available(macOS 10.14, *) else {
+                        result(1)
+                        break
+                    }
                     switch AVCaptureDevice.authorizationStatus(for: .audio) {
                     case .authorized:
                         result(1)
@@ -214,6 +220,10 @@ class MainFlutterWindow: NSWindow {
                         break
                     }
                 case "requestRecordAudio":
+                    guard #available(macOS 10.14, *) else {
+                        result(true)
+                        break
+                    }
                     AVCaptureDevice.requestAccess(for: .audio, completionHandler: { granted in
                         DispatchQueue.main.async {
                             result(granted)
