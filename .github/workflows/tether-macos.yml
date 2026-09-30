@@ -24,9 +24,19 @@ jobs:
           - os: macos-14      # Apple Silicon
             arch: arm64
             triplet: arm64-osx
+            name: arm64
           - os: macos-15-intel  # Intel (macos-13 runners were retired)
             arch: x86_64
             triplet: x64-osx
+            name: x86_64
+          # EXPERIMENTAL: Intel build with the minimum lowered to 10.13 (High
+          # Sierra). Flutter 3.24 officially needs 10.14, so this may fail to
+          # build or crash at launch; it never blocks the other two.
+          - os: macos-15-intel
+            arch: x86_64
+            triplet: x64-osx
+            name: x86_64-10.13
+            min_macos: '10.13'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
     env:
@@ -37,6 +47,20 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false   # we init hbb_common manually to apply the crypto patch
+
+      # Lower the deployment target everywhere it is pinned (same spots upstream
+      # rewrites for its arm64 build). The env var also reaches vcpkg's CMake
+      # builds and rustc. BSD sed on macOS needs `-i ''`.
+      - name: Lower minimum macOS
+        if: matrix.min_macos != ''
+        run: |
+          V='${{ matrix.min_macos }}'
+          sed -i '' -E "s/MACOSX_DEPLOYMENT_TARGET=[0-9]+\.[0-9]+/MACOSX_DEPLOYMENT_TARGET=$V/" build.py
+          sed -i '' -E "s/platform :osx, '.*'/platform :osx, '$V'/" flutter/macos/Podfile
+          sed -i '' -E "s/osx_minimum_system_version = \"[0-9]+\.[0-9]+\"/osx_minimum_system_version = \"$V\"/" Cargo.toml
+          sed -i '' -E "s/MACOSX_DEPLOYMENT_TARGET = [0-9]+\.[0-9]+;/MACOSX_DEPLOYMENT_TARGET = $V;/" flutter/macos/Runner.xcodeproj/project.pbxproj
+          echo "MACOSX_DEPLOYMENT_TARGET=$V" >> "$GITHUB_ENV"
+          grep -n "MACOSX_DEPLOYMENT_TARGET\|platform :osx\|osx_minimum" build.py flutter/macos/Podfile Cargo.toml flutter/macos/Runner.xcodeproj/project.pbxproj
 
       # --- hbb_common fork (base a920d00 + our X25519 crypto patch) ---
       - name: Populate hbb_common and apply crypto fork patch
@@ -85,7 +109,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/vcpkg/installed
-          key: vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-${{ matrix.triplet }}${{ matrix.min_macos }}-${{ hashFiles('vcpkg.json') }}
 
       - name: Set up vcpkg + install deps
         run: |
@@ -129,7 +153,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: tether-macos-${{ matrix.arch }}
+          name: tether-macos-${{ matrix.name }}
           path: tether-*.dmg
           if-no-files-found: warn
 
@@ -138,6 +162,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tether-macos-${{ matrix.arch }}-app
+          name: tether-macos-${{ matrix.name }}-app
           path: flutter/build/macos/Build/Products/Release/Tether.app
           if-no-files-found: ignore
