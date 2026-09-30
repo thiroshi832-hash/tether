@@ -22,6 +22,27 @@ macro_rules! my_println{
     };
 }
 
+/// Tether: a plain launch on a Mac without Metal (see `platform::macos::has_metal`).
+/// No Flutter window can be shown, so make sure the window-less `--server`
+/// (menu-bar icon + server + no-UI CM) is running, then show the ID/password.
+#[cfg(all(target_os = "macos", feature = "flutter"))]
+fn run_without_metal() {
+    let server_up = || matches!(crate::ipc::get_config("id"), Ok(Some(_)));
+    if !server_up() {
+        log::info!("No Metal device, starting the window-less --server");
+        if let Err(err) = crate::run_me(vec!["--server"]) {
+            log::error!("Failed to start --server: {err}");
+        }
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            if server_up() {
+                break;
+            }
+        }
+    }
+    crate::tray::no_metal::show_info();
+}
+
 /// shared by flutter and sciter main function
 ///
 /// [Note]
@@ -190,6 +211,11 @@ pub fn core_main() -> Option<Vec<String>> {
         #[cfg(target_os = "macos")]
         {
             crate::platform::macos::try_remove_temp_update_dir(None);
+        }
+        #[cfg(all(target_os = "macos", feature = "flutter"))]
+        if !crate::platform::macos::has_metal() {
+            run_without_metal();
+            return None;
         }
 
         #[cfg(windows)]
@@ -409,6 +435,12 @@ pub fn core_main() -> Option<Vec<String>> {
             }
             #[cfg(target_os = "macos")]
             {
+                // Tether: without Metal the Flutter CM window can't open, so serve
+                // incoming connections from a window-less CM in this process.
+                #[cfg(feature = "flutter")]
+                if !crate::platform::macos::has_metal() {
+                    std::thread::spawn(crate::flutter::connection_manager::start_cm_no_ui);
+                }
                 let handler = std::thread::spawn(move || crate::start_server(true, false));
                 crate::tray::start_tray();
                 // prevent server exit when encountering errors from tray

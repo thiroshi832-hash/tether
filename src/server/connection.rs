@@ -5513,6 +5513,11 @@ async fn start_ipc(
         #[allow(unused_mut)]
         #[allow(unused_assignments)]
         let mut args = vec!["--cm"];
+        // Tether: without Metal the Flutter CM window can't open.
+        #[cfg(target_os = "macos")]
+        if !crate::platform::macos::has_metal() {
+            args = vec!["--cm-no-ui"];
+        }
         #[allow(unused_mut)]
         #[cfg(target_os = "linux")]
         let mut user = None;

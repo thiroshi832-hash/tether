@@ -27,9 +27,14 @@ fn make_tray() -> hbb_common::ResultType<()> {
     use hbb_common::anyhow::Context;
     use tao::event_loop::{ControlFlow, EventLoopBuilder};
     use tray_icon::{
-        menu::{Menu, MenuEvent, MenuItem},
+        menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
         TrayIcon, TrayIconBuilder, TrayIconEvent as TrayEvent,
     };
+    // Tether: see `no_metal`.
+    #[cfg(target_os = "macos")]
+    let window_less = !crate::platform::macos::has_metal();
+    #[cfg(not(target_os = "macos"))]
+    let window_less = false;
     let icon;
     #[cfg(target_os = "macos")]
     {
@@ -72,11 +77,26 @@ fn make_tray() -> hbb_common::ResultType<()> {
     } else {
         None
     };
-    let open_i = MenuItem::new(translate("Open".to_owned()), true, None);
-    if let Some(quit_i) = &quit_i {
-        tray_menu.append_items(&[&open_i, quit_i]).ok();
+    let open_i = if window_less {
+        MenuItem::new("Show ID and password…", true, None)
     } else {
-        tray_menu.append_items(&[&open_i]).ok();
+        MenuItem::new(translate("Open".to_owned()), true, None)
+    };
+    let id_i = MenuItem::new("ID: …", false, None);
+    let password_i = MenuItem::new("One-time password: …", false, None);
+    let set_password_i = MenuItem::new("Set permanent password…", true, None);
+    let set_server_i = MenuItem::new("Set ID server…", true, None);
+    if window_less {
+        tray_menu
+            .append_items(&[&id_i, &password_i, &PredefinedMenuItem::separator()])
+            .ok();
+    }
+    tray_menu.append(&open_i).ok();
+    if window_less {
+        tray_menu.append_items(&[&set_password_i, &set_server_i]).ok();
+    }
+    if let Some(quit_i) = &quit_i {
+        tray_menu.append(quit_i).ok();
     }
     let tooltip = |count: usize| {
         if count == 0 {
@@ -111,6 +131,11 @@ fn make_tray() -> hbb_common::ResultType<()> {
     let mut last_conn: Vec<(i32, String, String)> = Vec::new();
 
     let open_func = move || {
+        #[cfg(target_os = "macos")]
+        if window_less {
+            std::thread::spawn(no_metal::show_info);
+            return;
+        }
         if cfg!(not(feature = "flutter")) {
             crate::run_me::<&str>(vec![]).ok();
             return;
@@ -140,6 +165,18 @@ fn make_tray() -> hbb_common::ResultType<()> {
     std::thread::spawn(move || {
         start_query_session_count(ipc_sender.clone(), showcm_receiver);
     });
+    // Tether: keep the window-less menu's ID / one-time password current.
+    #[cfg(target_os = "macos")]
+    let (info_sender, info_receiver) = std::sync::mpsc::channel::<(String, String)>();
+    #[cfg(target_os = "macos")]
+    if window_less {
+        std::thread::spawn(move || loop {
+            if info_sender.send(no_metal::id_and_password()).is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(3));
+        });
+    }
     #[cfg(windows)]
     let mut last_click = std::time::Instant::now();
     #[cfg(target_os = "macos")]
@@ -211,6 +248,14 @@ fn make_tray() -> hbb_common::ResultType<()> {
             } else if event.id == open_i.id() {
                 open_func();
             }
+            #[cfg(target_os = "macos")]
+            if window_less {
+                if event.id == set_password_i.id() {
+                    std::thread::spawn(no_metal::set_permanent_password);
+                } else if event.id == set_server_i.id() {
+                    std::thread::spawn(no_metal::set_id_server);
+                }
+            }
             // Tether: clicking a per-connection entry asks the service to show that
             // connection's info (CM) window.
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
@@ -240,6 +285,13 @@ fn make_tray() -> hbb_common::ResultType<()> {
                 }
                 _ => {}
             }
+        }
+
+        #[cfg(target_os = "macos")]
+        if let Ok((id, password)) = info_receiver.try_recv() {
+            id_i.set_text(format!("ID: {id}"));
+            let password = if password.is_empty() { "-" } else { &password };
+            password_i.set_text(format!("One-time password: {password}"));
         }
 
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
@@ -317,6 +369,193 @@ async fn start_query_session_count(
             }
         }
         hbb_common::sleep(1.).await;
+    }
+}
+
+/// Tether: window-less mode for Macs without Metal (see `platform::macos::has_metal`).
+/// The Flutter window can't be created there, so the menu-bar icon offers the ID,
+/// password and basic settings through AppleScript dialogs (no Metal needed).
+/// Everything goes over IPC to the `--server` process, like the Flutter UI does.
+#[cfg(target_os = "macos")]
+pub mod no_metal {
+    use hbb_common::log;
+    use std::process::{Command, Stdio};
+
+    const MIN_PASSWORD_LEN: usize = 6;
+
+    /// Shows a `display dialog` and returns the clicked button, plus the typed
+    /// text when `answer` is `Some((default, hidden))`. A button named "Cancel"
+    /// makes AppleScript fail with -128, which returns `None`. Texts are passed
+    /// as arguments so nothing needs escaping.
+    fn dialog(
+        message: &str,
+        answer: Option<(&str, bool)>,
+        buttons: &[&str],
+    ) -> Option<(String, String)> {
+        let button_list = (0..buttons.len())
+            .map(|i| format!("item {} of argv", i + 3))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut show = format!(
+            "set r to display dialog (item 1 of argv) with title \"Tether\" \
+             buttons {{{button_list}}} default button {}",
+            buttons.len()
+        );
+        if buttons.contains(&"Cancel") {
+            show += " cancel button \"Cancel\"";
+        }
+        if let Some((_, hidden)) = answer {
+            show += " default answer (item 2 of argv)";
+            if hidden {
+                show += " with hidden answer";
+            }
+        }
+        let ret = if answer.is_some() {
+            "return (button returned of r) & linefeed & (text returned of r)"
+        } else {
+            "return button returned of r"
+        };
+        let out = Command::new("osascript")
+            .args(["-e", "on run argv", "-e", "tell me to activate", "-e"])
+            .arg(show)
+            .args(["-e", ret, "-e", "end run"])
+            .arg(message)
+            .arg(answer.map(|a| a.0).unwrap_or(""))
+            .args(buttons)
+            .output()
+            .map_err(|e| log::error!("osascript failed: {e}"))
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let out = String::from_utf8_lossy(&out.stdout);
+        let out: &str = &out;
+        let out = out.strip_suffix('\n').unwrap_or(out);
+        let (button, text) = out.split_once('\n').unwrap_or((out, ""));
+        if button == "Cancel" {
+            return None;
+        }
+        Some((button.to_owned(), text.to_owned()))
+    }
+
+    fn message(text: &str) {
+        dialog(text, None, &["OK"]);
+    }
+
+    fn copy(text: &str) {
+        let child = Command::new("pbcopy").stdin(Stdio::piped()).spawn();
+        if let Ok(mut child) = child {
+            if let Some(stdin) = child.stdin.as_mut() {
+                use std::io::Write;
+                stdin.write_all(text.as_bytes()).ok();
+            }
+            child.wait().ok();
+        }
+    }
+
+    /// (ID, one-time password) from the running server.
+    pub fn id_and_password() -> (String, String) {
+        let id = crate::ipc::get_id();
+        let password = crate::ipc::get_config("temporary-password")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        (id, password)
+    }
+
+    pub fn show_info() {
+        let (id, password) = id_and_password();
+        let password = if password.is_empty() { "-".to_owned() } else { password };
+        let text = format!(
+            "Tether is running in the menu bar. This Mac's graphics can't show \
+             the Tether window, but it can be controlled remotely.\n\n\
+             ID: {id}\nOne-time password: {password}\n\n\
+             Use the Tether icon in the menu bar to set a permanent password \
+             or the ID server."
+        );
+        match dialog(&text, None, &["Copy password", "Copy ID", "OK"]) {
+            Some((b, _)) if b == "Copy ID" => copy(&id),
+            Some((b, _)) if b == "Copy password" => copy(&password),
+            _ => {}
+        }
+    }
+
+    pub fn set_permanent_password() {
+        let Some((_, first)) = dialog(
+            &format!(
+                "New permanent password (at least {MIN_PASSWORD_LEN} characters). \
+                 Leave empty to remove it and use only the one-time password."
+            ),
+            Some(("", true)),
+            &["Cancel", "OK"],
+        ) else {
+            return;
+        };
+        if !first.is_empty() {
+            if first.chars().count() < MIN_PASSWORD_LEN {
+                message(&format!(
+                    "The password must be at least {MIN_PASSWORD_LEN} characters."
+                ));
+                return;
+            }
+            let Some((_, second)) =
+                dialog("Enter the password again.", Some(("", true)), &["Cancel", "OK"])
+            else {
+                return;
+            };
+            if first != second {
+                message("The passwords don't match. Nothing was changed.");
+                return;
+            }
+        }
+        match crate::ipc::set_permanent_password(first.clone()) {
+            Ok(()) if first.is_empty() => message("The permanent password was removed."),
+            Ok(()) => message("The permanent password was set."),
+            Err(err) => message(&format!("Failed to set the password: {err}")),
+        }
+    }
+
+    pub fn set_id_server() {
+        let mut options = crate::ipc::get_options();
+        let current = |k: &str| options.get(k).cloned().unwrap_or_default();
+        let (host, key) = (current("custom-rendezvous-server"), current("key"));
+        let Some((_, host)) = dialog(
+            "ID server (host name or IP address). Leave empty to use the default server.",
+            Some((host.as_str(), false)),
+            &["Cancel", "Next"],
+        ) else {
+            return;
+        };
+        let host = host.trim().to_owned();
+        let key = if host.is_empty() {
+            String::new()
+        } else {
+            let Some((_, key)) = dialog(
+                "Key: the contents of id_ed25519.pub on the server.",
+                Some((key.as_str(), false)),
+                &["Cancel", "Save"],
+            ) else {
+                return;
+            };
+            key.trim().to_owned()
+        };
+        // The relay defaults to the ID server's host when left empty.
+        for (k, v) in [
+            ("custom-rendezvous-server", host.clone()),
+            ("key", key),
+            ("relay-server", String::new()),
+        ] {
+            if v.is_empty() {
+                options.remove(k);
+            } else {
+                options.insert(k.to_owned(), v);
+            }
+        }
+        match crate::ipc::set_options(options) {
+            Ok(()) if host.is_empty() => message("Tether now uses the default server."),
+            Ok(()) => message(&format!("Tether now uses the ID server {host}.")),
+            Err(err) => message(&format!("Failed to save the server: {err}")),
+        }
     }
 }
 

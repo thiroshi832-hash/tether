@@ -38,6 +38,33 @@ use std::{
 // macOS boolean_t is defined as `int` in <mach/boolean.h>
 type BooleanT = hbb_common::libc::c_int;
 
+#[link(name = "Metal", kind = "framework")]
+extern "C" {
+    fn MTLCreateSystemDefaultDevice() -> id;
+}
+
+/// Tether: Flutter's macOS embedder can only draw through Metal, so on a GPU
+/// without Metal support (pre-2012 Macs stuck on High Sierra) no Flutter
+/// window can be created and Tether runs window-less from the menu bar.
+/// `TETHER_FORCE_NO_METAL=1` forces that mode for testing on other Macs.
+pub fn has_metal() -> bool {
+    static HAS_METAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *HAS_METAL.get_or_init(|| {
+        if std::env::var("TETHER_FORCE_NO_METAL").as_deref() == Ok("1") {
+            return false;
+        }
+        unsafe {
+            let device = MTLCreateSystemDefaultDevice();
+            if device == nil {
+                log::warn!("No Metal device, Flutter windows are unavailable");
+                return false;
+            }
+            let _: () = msg_send![device, release];
+            true
+        }
+    })
+}
+
 static PRIVILEGES_SCRIPTS_DIR: Dir =
     include_dir!("$CARGO_MANIFEST_DIR/src/platform/privileges_scripts");
 static mut LATEST_SEED: i32 = 0;
